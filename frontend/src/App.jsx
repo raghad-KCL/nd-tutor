@@ -14,6 +14,7 @@ const RULES = [
   { value: "IFF_I", label: "↔I   (Equivalence Introduction)" },
   { value: "NEG_E", label: "¬E   (Negation Elimination)" },
   { value: "NEG_I", label: "¬I   (Negation Introduction)" },
+  { value: "REIT", label: "Reit (Reiteration)" },
 ];
 
 function parseRefs(refsText) {
@@ -22,14 +23,29 @@ function parseRefs(refsText) {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)
-    .map((s) => Number(s))
-    .filter((n) => Number.isFinite(n) && n > 0);
+    .map((s) => {
+      const rangeMatch = s.match(/^(\d+)-(\d+)$/);
+      if (rangeMatch) {
+        const i = Number(rangeMatch[1]);
+        const j = Number(rangeMatch[2]);
+        return i > 0 && j > 0 ? [i, j] : null;
+      }
+      const n = Number(s);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    })
+    .filter((x) => x !== null);
+}
+
+function formatRef(ref) {
+  return Array.isArray(ref) ? `${ref[0]}\u2013${ref[1]}` : String(ref);
 }
 
 function sameRefs(a = [], b = []) {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return false;
+    if (Array.isArray(a[i]) && Array.isArray(b[i])) {
+      if (a[i][0] !== b[i][0] || a[i][1] !== b[i][1]) return false;
+    } else if (a[i] !== b[i]) return false;
   }
   return true;
 }
@@ -89,11 +105,12 @@ function buildProposedScopePath(
   rule,
   refs,
   lines,
-  currentScopePath,
   openBoxes
 ) {
   if (rule === "IMP_I") {
-    const assumptionNo = refs[0];
+    const firstRef = refs[0];
+    // firstRef may be a range [i, j] or a plain integer
+    const assumptionNo = Array.isArray(firstRef) ? firstRef[0] : firstRef;
     const assumptionLine = lines[assumptionNo - 1];
 
     if (!assumptionLine || assumptionLine.kind !== "assumption") {
@@ -103,21 +120,11 @@ function buildProposedScopePath(
     return assumptionLine.scopePath.slice(0, -1);
   }
 
-  return getActiveWritingScope(openBoxes, currentScopePath, lines);
+  return getActiveWritingScope(openBoxes, lines);
 }
 
 
-function lineIsInsideScope(line, scopePath) {
-  if (!scopePath || scopePath.length === 0) return false;
-  if (!line?.scopePath) return false;
-  if (line.scopePath.length < scopePath.length) return false;
 
-  for (let i = 0; i < scopePath.length; i++) {
-    if (line.scopePath[i] !== scopePath[i]) return false;
-  }
-
-  return true;
-}
 
 function samePath(a = [], b = []) {
   if (a.length !== b.length) return false;
@@ -166,6 +173,7 @@ function boxGoalReached(boxLine, lines) {
 
   return lines.some(
     (ln) =>
+      ln.kind === "derived" &&
       samePath(ln.scopePath || [], boxLine.scopePath || []) &&
       (ln.formula || "").trim() === goal
   );
@@ -178,13 +186,14 @@ function isImpBoxGoalReached(box, lines) {
 
   return lines.some(
     (ln) =>
-      sameRefs(ln.scopePath || [], box.scopePath || []) &&
+      ln.kind === "derived" &&
+      samePath(ln.scopePath || [], box.scopePath || []) &&
       (ln.formula || "").trim() === goal
   );
 }
 
-function getActiveWritingScope(openBoxes, currentScopePath, lines) {
-  if (!openBoxes.length) return currentScopePath;
+function getActiveWritingScope(openBoxes, lines) {
+  if (!openBoxes.length) return [];
 
   for (let i = openBoxes.length - 1; i >= 0; i--) {
     const box = openBoxes[i];
@@ -198,15 +207,396 @@ function getActiveWritingScope(openBoxes, currentScopePath, lines) {
   return [];
 }
 
+function buildGoalTree(lines, openBoxes, conclusion) {
+  const topLevelLines = lines.filter(
+    (ln) => (ln.scopePath || []).length === 0
+  );
+
+  const isRootProved = topLevelLines.some(
+    (ln) => (ln.formula || "").trim() === (conclusion || "").trim()
+  );
+
+  const children = [];
+
+  for (const box of openBoxes) {
+    const goalDerived = lines.some(
+      (ln) =>
+        samePath(ln.scopePath || [], box.scopePath || []) &&
+        (ln.formula || "").trim() === (box.goalFormula || "").trim()
+    );
+
+    children.push({
+      id: `box-${box.assumptionLineNo}`,
+      label: box.goalFormula || "(subproof goal)",
+      status: goalDerived ? "proved" : "open",
+      children: [
+        {
+          id: `box-assume-${box.assumptionLineNo}`,
+          label: `${box.assumptionFormula} (assumption)`,
+          status: "proved",
+          children: [],
+        },
+      ],
+    });
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (ln.kind === "derived" && (ln.scopePath || []).length === 0) {
+      children.push({
+        id: `line-${i}`,
+        label: ln.formula,
+        status: "proved",
+        children: [],
+      });
+    }
+  }
+
+  return {
+    id: "root",
+    label: conclusion || "(no conclusion)",
+    status: isRootProved ? "proved" : "open",
+    children,
+  };
+}
+
+// ── Goal tree helper components ──────────────────────────────────────────
+
+function buildBoxTree(lines, openBoxes) {
+  // Build from all assumption lines in `lines` (covers both open and closed subproofs),
+  // supplemented by openBoxes for goalFormula / assumptionFormula metadata.
+  const openByLineNo = {};
+  for (const box of (openBoxes || [])) {
+    openByLineNo[box.assumptionLineNo] = box;
+  }
+
+  const allBoxes = (lines || [])
+    .filter(ln => ln.kind === "assumption" && (ln.scopePath || []).length > 0)
+    .map((ln) => {
+      const lineNo = (ln.scopePath || [])[ln.scopePath.length - 1];
+      const open = openByLineNo[lineNo];
+      return {
+        scopePath: ln.scopePath || [],
+        assumptionLineNo: lineNo,
+        assumptionFormula: open ? open.assumptionFormula : ln.formula,
+        goalFormula: open ? open.goalFormula : (ln.boxGoal || ""),
+        isOpen: !!open,
+      };
+    });
+
+  const sorted = [...allBoxes].sort(
+    (a, b) => (a.scopePath.length || 0) - (b.scopePath.length || 0)
+  );
+
+  const roots = [];
+  const nodeMap = {};
+  for (const box of sorted) {
+    const node = { box, children: [] };
+    const key = box.scopePath.join(",");
+    nodeMap[key] = node;
+    const parentPath = box.scopePath.slice(0, -1);
+    const parentKey = parentPath.join(",");
+    if (parentKey !== "" && nodeMap[parentKey]) {
+      nodeMap[parentKey].children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+  return roots;
+}
+
+function GTConnector() {
+  return (
+    <div style={{ width: 2, height: 20, background: "#cbd5e1", margin: "0 auto" }} />
+  );
+}
+
+function GTGoalNode({ formula, proved }) {
+  return (
+    <div style={{
+      background: "#f8fafc",
+      border: `2px solid ${proved ? "#22c55e" : "#94a3b8"}`,
+      borderRadius: 12,
+      padding: "8px 20px",
+      textAlign: "center",
+      maxWidth: "100%",
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", wordBreak: "break-word" }}>
+        {formula || "(no conclusion)"}
+      </div>
+      <div style={{ fontSize: 10, color: proved ? "#22c55e" : "#94a3b8", marginTop: 3 }}>
+        {proved ? "✓ proved" : "○ not yet proved"}
+      </div>
+    </div>
+  );
+}
+
+function GTDerivedNode({ formula, rule }) {
+  return (
+    <div style={{
+      background: "#f8f9fb",
+      border: "1px solid #e2e8f0",
+      borderRadius: 8,
+      padding: "5px 12px",
+      textAlign: "center",
+      maxWidth: "100%",
+    }}>
+      <div style={{ fontSize: 12, color: "#1a1a1a", wordBreak: "break-word" }}>{formula}</div>
+      {rule && <div style={{ fontSize: 10, color: "#8a8f99", marginTop: 2 }}>{rule}</div>}
+    </div>
+  );
+}
+
+function GTSubproofRegion({ node, lines, depth = 0 }) {
+  const { box, children } = node;
+  const color = getSubproofColor(depth);
+  const goalReached = (lines || []).some(
+    ln =>
+      ln.kind === "derived" &&
+      samePath(ln.scopePath || [], box.scopePath || []) &&
+      (ln.formula || "").trim() === (box.goalFormula || "").trim()
+  );
+
+  return (
+    <div style={{
+      background: color.treeBg,
+      border: `1.5px dashed ${color.treeBorder}`,
+      borderRadius: 14,
+      padding: 12,
+      width: "100%",
+      boxSizing: "border-box",
+    }}>
+      <div style={{ fontSize: 10, color: color.label, marginBottom: 8, fontWeight: 600 }}>→I subproof</div>
+
+      <div style={{
+        background: "#fefce8",
+        border: `1.5px solid ${color.border}`,
+        borderRadius: 10,
+        padding: "6px 14px",
+        textAlign: "center",
+      }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#92400e", wordBreak: "break-word" }}>
+          {box.assumptionFormula}
+        </div>
+        <div style={{ fontSize: 10, color: "#b45309", marginTop: 2 }}>assumption</div>
+      </div>
+
+      {children.length > 0 && (
+        <div style={{ marginTop: 8, paddingLeft: 8, paddingRight: 8 }}>
+          {children.map(child => (
+            <div key={(child.box.scopePath || []).join(",")}>
+              <GTConnector />
+              <GTSubproofRegion node={child} lines={lines} depth={depth + 1} />
+            </div>
+          ))}
+        </div>
+      )}
+
+      <GTConnector />
+
+      <div style={{
+        background: goalReached ? "#f0fdf4" : color.treeBg,
+        border: `1.5px solid ${goalReached ? "#22c55e" : color.treeBorder}`,
+        borderRadius: 10,
+        padding: "6px 14px",
+        textAlign: "center",
+      }}>
+        <div style={{
+          fontSize: 12,
+          fontWeight: 600,
+          color: goalReached ? "#166534" : color.label,
+          wordBreak: "break-word",
+        }}>
+          {goalReached ? `✓ ${box.goalFormula}` : `derive: ${box.goalFormula}`}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GoalTree({ lines, openBoxes, conclusion }) {
+  const [collapsed, setCollapsed] = useState(false);
+
+  const hasLines = lines && lines.length > 0;
+
+  const conclusionProved = hasLines && lines.some(
+    ln => (ln.scopePath || []).length === 0 &&
+          (ln.formula || "").trim() === (conclusion || "").trim()
+  );
+
+  const boxTreeRoots = buildBoxTree(lines, openBoxes);
+
+  const topLevelDerived = hasLines
+    ? lines.filter(ln => ln.kind === "derived" && (ln.scopePath || []).length === 0)
+    : [];
+
+  return (
+    <div style={{
+      background: "#ffffff",
+      border: "none",
+      borderRadius: 18,
+      padding: collapsed ? "10px 16px" : "20px",
+      minWidth: 0,
+      boxSizing: "border-box",
+      boxShadow: "0 2px 12px rgba(0,0,0,0.07)",
+      transition: "padding 0.25s ease",
+      overflow: "hidden",
+    }}>
+      {/* Header */}
+      <div style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        marginBottom: collapsed ? 0 : 14,
+      }}>
+        <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: "#1a1a1a" }}>
+          Proof Goal Tree
+        </h2>
+        <button
+          onClick={() => setCollapsed(c => !c)}
+          style={{
+            width: 28, height: 28, borderRadius: "50%",
+            border: "1px solid #e8e9ec", background: "#f5f6f8",
+            color: "#0bc4b0", fontSize: 18, fontWeight: 700,
+            cursor: "pointer", display: "flex", alignItems: "center",
+            justifyContent: "center", lineHeight: 1, flexShrink: 0,
+          }}
+          title={collapsed ? "Expand" : "Collapse"}
+        >
+          {collapsed ? "+" : "−"}
+        </button>
+      </div>
+
+      {!collapsed && (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0 }}>
+          {!hasLines ? (
+            <div style={{ color: "#8a8f99", fontSize: 13, textAlign: "center", padding: "12px 0" }}>
+              Start the proof to see the goal tree.
+            </div>
+          ) : (
+            <>
+              <div style={{ fontSize: 10, color: "#94a3b8", textTransform: "uppercase", marginBottom: 4, letterSpacing: 1 }}>
+                Goal
+              </div>
+
+              <GTGoalNode formula={conclusion.trim() || "(no conclusion)"} proved={conclusionProved} />
+
+              {boxTreeRoots.map(node => (
+                <div key={(node.box.scopePath || []).join(",")} style={{ width: "100%" }}>
+                  <GTConnector />
+                  <GTSubproofRegion node={node} lines={lines} />
+                </div>
+              ))}
+
+              {topLevelDerived.map((ln, i) => (
+                <div key={i} style={{ width: "100%" }}>
+                  <GTConnector />
+                  <GTDerivedNode formula={ln.formula} rule={ln.rule} />
+                </div>
+              ))}
+
+              <>
+                <GTConnector />
+                <div style={{
+                  width: 36, height: 36, borderRadius: "50%",
+                  background: conclusionProved ? "#dcfce7" : "#f8fafc",
+                  border: `2px solid ${conclusionProved ? "#22c55e" : "#cbd5e1"}`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 18, color: conclusionProved ? "#166534" : "#cbd5e1",
+                  opacity: conclusionProved ? 1 : 0.25,
+                }}>✓</div>
+              </>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ToastContainer({ toasts, onDismiss }) {
+  const typeStyles = {
+    success:  { bg: "#f0fdf4", border: "#22c55e", titleColor: "#166534", icon: "✓" },
+    error:    { bg: "#fff1f2", border: "#ef4444", titleColor: "#991b1b", icon: "✕" },
+    info:     { bg: "#eff6ff", border: "#3b82f6", titleColor: "#1d4ed8", icon: "ℹ" },
+    complete: { bg: "#f0fdf4", border: "#0bc4b0", titleColor: "#0bc4b0", icon: "✓" },
+  };
+
+  return (
+    <div style={{
+      position: "fixed",
+      bottom: 28,
+      right: 28,
+      zIndex: 9999,
+      display: "flex",
+      flexDirection: "column",
+      gap: 10,
+      maxWidth: 360,
+      width: "calc(100% - 56px)",
+      pointerEvents: "none",
+    }}>
+      {toasts.map(toast => {
+        const s = typeStyles[toast.type] || typeStyles.info;
+        return (
+          <div key={toast.id} style={{
+            background: s.bg,
+            borderLeft: `4px solid ${s.border}`,
+            borderRadius: 12,
+            padding: "14px 16px",
+            boxShadow: "0 4px 20px rgba(0,0,0,0.12)",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            gap: 12,
+            pointerEvents: "all",
+            animation: "toastIn 0.2s ease-out",
+          }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flex: 1 }}>
+              <span style={{ color: s.border, fontWeight: 700, fontSize: 16, marginTop: 1, flexShrink: 0 }}>
+                {s.icon}
+              </span>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 14, color: s.titleColor, marginBottom: 3 }}>
+                  {toast.title}
+                </div>
+                {toast.message && (
+                  <div style={{ fontSize: 13, color: "#555c6a", lineHeight: 1.5 }}>
+                    {toast.message}
+                  </div>
+                )}
+              </div>
+            </div>
+            <button onClick={() => onDismiss(toast.id)} style={{
+              background: "none", border: "none", cursor: "pointer",
+              fontSize: 18, color: "#aaa", padding: 0, lineHeight: 1, flexShrink: 0,
+            }}>×</button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const SUBPROOF_COLORS = [
+  { border: "#0bc4b0", bg: "#e8faf8", treeBorder: "#0bc4b0", treeBg: "#e8faf8", label: "#0bc4b0" },
+  { border: "#818cf8", bg: "#eef2ff", treeBorder: "#818cf8", treeBg: "#eef2ff", label: "#6366f1" },
+  { border: "#f59e0b", bg: "#fffbeb", treeBorder: "#f59e0b", treeBg: "#fffbeb", label: "#d97706" },
+  { border: "#ec4899", bg: "#fdf2f8", treeBorder: "#ec4899", treeBg: "#fdf2f8", label: "#db2777" },
+  { border: "#22c55e", bg: "#f0fdf4", treeBorder: "#22c55e", treeBg: "#f0fdf4", label: "#16a34a" },
+];
+
+function getSubproofColor(depth) {
+  return SUBPROOF_COLORS[depth % SUBPROOF_COLORS.length];
+}
+
 export default function App() {
 
-  const [page, setPage] = useState("workspace");
+  const [page, setPage] = useState("create");
 
   const [savingProof, setSavingProof] = useState(false);
-  const [saveFeedback, setSaveFeedback] = useState(null);
+  const [toasts, setToasts] = useState([]);
 
   // ----------
-  const [globalFeedback, setGlobalFeedback] = useState(null);
   const [checkingProof, setCheckingProof] = useState(false);
   const [checkedProofStatus, setCheckedProofStatus] = useState(null);
 
@@ -236,9 +626,7 @@ export default function App() {
   const [rule, setRule] = useState("AND_E1");
   const [refsText, setRefsText] = useState("");
 
-  // --- Validation response ---
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
 
   // Task lock flag
   const [taskLocked, setTaskLocked] = useState(false);
@@ -291,9 +679,6 @@ export default function App() {
     setLines(proof.lines || []);
     setTaskLocked(true);
 
-    setResult(null);
-    setGlobalFeedback(null);
-    setSaveFeedback(null);
     setCheckedProofStatus(null);
     setStepFormula("");
     setRefsText("");
@@ -303,17 +688,17 @@ export default function App() {
 
     setPage("workspace");
   }
+
   function buildDefaultProofTitle() {
     const goal = conclusion.trim();
     if (!goal) return "Untitled proof";
     return `Proof of ${goal}`;
-    }
+  }
 
   async function saveProof() {
     if (!taskLocked) return;
 
     setSavingProof(true);
-    setSaveFeedback(null);
 
     try {
       const res = await fetch("http://localhost:8000/api/proofs/", {
@@ -335,33 +720,22 @@ export default function App() {
       const data = await res.json();
 
       if (!res.ok || data?.ok !== true) {
-        setSaveFeedback({
-          ok: false,
-          message: data?.message || "Failed to save proof.",
-        });
+        showToast("error", "Save failed", data?.message || "Could not save proof.");
         return;
       }
 
-      setSaveFeedback({
-        ok: true,
-        message: data?.message || "Proof saved successfully.",
-        proofId: data?.proof?.id ?? null,
-      });
+      showToast("success", "Proof saved", data?.message || "Saved successfully.");
     } catch (e) {
-      setSaveFeedback({
-        ok: false,
-        message: `Save failed: ${String(e)}`,
-      });
+      showToast("error", "Save failed", String(e));
     } finally {
       setSavingProof(false);
     }
   }
-  
+
   //###########################33
   async function checkProof() {
     if (!taskLocked) return;
 
-    setResult(null);
     setCheckingProof(true);
 
     try {
@@ -378,24 +752,17 @@ export default function App() {
       });
 
       const data = await res.json();
-      setGlobalFeedback(data);
 
       if (data?.complete === true && data?.goalLine) {
-        setCheckedProofStatus({
-          complete: true,
-          goalLine: data.goalLine,
-        });
+        setCheckedProofStatus({ complete: true, goalLine: data.goalLine });
+        showToast("complete", "Proof complete ✓", data.message || "The conclusion was derived at top level.");
       } else {
         setCheckedProofStatus(null);
+        showToast("info", "Proof in progress", data.message || "Goal not yet reached.");
       }
     } catch (e) {
-      setGlobalFeedback({
-        ok: false,
-        message: `Check Proof failed: ${String(e)}`,
-        progress: [],
-        hints: [],
-      });
       setCheckedProofStatus(null);
+      showToast("error", "Check failed", String(e));
     } finally {
       setCheckingProof(false);
     }
@@ -438,27 +805,24 @@ export default function App() {
 
   async function startProof() {
     setLoading(true);
-    setResult(null);
     setCheckedProofStatus(null);
 
     const payload = { proofState: { premises, conclusion } };
 
     try {
-      const res = await fetch("http://localhost:8000/api/validate-task/", {
+      const response = await fetch("http://localhost:8000/api/validate-task/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
+      const data = await response.json();
 
       if (data?.ok === true) {
         const normPremises = Array.isArray(data.premises) ? data.premises : premises;
         const normConclusion =
           typeof data.conclusion === "string" ? data.conclusion : conclusion;
 
-        setSaveFeedback(null);
-        setGlobalFeedback(null);
         setPremisesText(normPremises.join("\n"));
         setConclusion(normConclusion);
 
@@ -466,32 +830,34 @@ export default function App() {
         setCurrentScopePath([]);
         setOpenBoxes([]);
         setTaskLocked(true);
-
-        setResult({
-          status: res.status,
-          data: { ok: true, message: "Task valid. Proof started." },
-        });
+        setPage("workspace");
       } else {
-        setResult({ status: res.status, data });
+        showToast(
+          "error",
+          "Invalid task",
+          "Please check your premises and conclusion, then try again."
+        );
       }
     } catch (e) {
-      setResult({ error: String(e) });
+      showToast(
+        "error",
+        "Invalid task",
+        "We couldn't read that task. Please check the syntax and try again."
+      );
     } finally {
       setLoading(false);
     }
   }
 
   function resetProofToPremises() {
-    setGlobalFeedback(null);
     setTaskLocked(false);
+    setPage("create");
     setLines(premises.map(makePremiseLine));
     setCurrentScopePath([]);
     setOpenBoxes([]);
     setStepFormula("");
     setRefsText("");
-    setResult(null);
     setCheckedProofStatus(null);
-    setSaveFeedback(null);
   }
 
   function onChangePremisesText(next) {
@@ -499,23 +865,32 @@ export default function App() {
 
     if (!taskLocked) {
       const nextPremises = premisesFromText(next);
-      setGlobalFeedback(null);
       setLines(nextPremises.map(makePremiseLine));
       setCurrentScopePath([]);
       setOpenBoxes([]);
       setCheckedProofStatus(null);
-      setSaveFeedback(null);
     }
+  }
+
+  function showToast(type, title, message) {
+    const id = Date.now();
+    setToasts((prev) => [...prev, { id, type, title, message }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 5000);
+  }
+
+  function dismissToast(id) {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
   }
 
   async function openImplicationBox() {
     if (!taskLocked) return;
 
     setLoading(true);
-    setResult(null);
 
     try {
-      const res = await fetch("http://localhost:8000/api/open-subproof", {
+      const response = await fetch("http://localhost:8000/api/open-subproof", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -524,14 +899,14 @@ export default function App() {
         }),
       });
 
-      const data = await res.json();
-      setResult({ status: res.status, data });
+      const data = await response.json();
 
       if (data?.ok !== true) {
+        showToast("error", "Could not open subproof", data?.message || "Check the formula.");
         return;
       }
 
-      const parentScopePath = getActiveWritingScope(openBoxes, currentScopePath, lines);
+      const parentScopePath = getActiveWritingScope(openBoxes, lines);
 
       const newLineNo = lines.length + 1;
       const newScopePath = [...parentScopePath, newLineNo];
@@ -561,12 +936,11 @@ export default function App() {
       setOpenBoxes((prev) => [...prev, newBox]);
       setCurrentScopePath(newScopePath);
 
-      setSaveFeedback(null);
-      setGlobalFeedback(null);
       setStepFormula("");
       setRefsText("");
+      showToast("success", "Subproof opened", "Assumption added. Derive the goal inside the box.");
     } catch (e) {
-      setResult({ error: String(e) });
+      showToast("error", "Could not open subproof", String(e));
     } finally {
       setLoading(false);
     }
@@ -578,12 +952,10 @@ export default function App() {
       rule,
       newRefs,
       lines,
-      currentScopePath,
       openBoxes
     );
 
     setLoading(true);
-    setResult(null);
 
     const payload = {
       proofState: {
@@ -600,14 +972,13 @@ export default function App() {
     };
 
     try {
-      const res = await fetch("http://localhost:8000/api/validate-step", {
+      const response = await fetch("http://localhost:8000/api/validate-step", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
-      setResult({ status: res.status, data });
+      const data = await response.json();
 
       if (data?.ok === true) {
         const newFormula = (data.normalised || stepFormula).trim();
@@ -622,14 +993,7 @@ export default function App() {
         );
 
         if (alreadyExists) {
-          setResult({
-            status: res.status,
-            data: {
-              ok: false,
-              type: "RULE",
-              message: "This exact step already exists in your proof.",
-            },
-          });
+          showToast("error", "Duplicate step", "This exact step already exists in your proof.");
           return;
         }
 
@@ -639,35 +1003,33 @@ export default function App() {
           rule,
           refs: newRefs,
           scopePath,
-          discharges: rule === "IMP_I" ? [newRefs[0]] : [],
+          discharges: [],
         };
 
         const nextLines = [...lines, newLine];
         setLines(nextLines);
 
-        if (rule === "IMP_I") {
-          const assumptionNo = newRefs[0];
-          setOpenBoxes((prev) =>
-            prev.filter((box) => box.assumptionLineNo !== assumptionNo)
-          );
-        }
-
-        const remainingBoxes =
-          rule === "IMP_I"
-            ? openBoxes.filter((box) => box.assumptionLineNo !== newRefs[0])
-            : openBoxes;
+        // Auto-close any box whose goal was just satisfied by this step.
+        const remainingBoxes = openBoxes.filter(
+          (box) => !isImpBoxGoalReached(box, nextLines)
+        );
+        setOpenBoxes(() => remainingBoxes);
 
         setCurrentScopePath(
-          getActiveWritingScope(remainingBoxes, scopePath, nextLines)
+          getActiveWritingScope(remainingBoxes, nextLines)
         );
 
-        setSaveFeedback(null);
-        setGlobalFeedback(null);
         setStepFormula("");
         setRefsText("");
+        showToast("success", "Step accepted", data.message || "Step valid.");
+      } else {
+        const msg = data?.message || "Step could not be validated.";
+        if (data?.type === "SYNTAX") showToast("error", "Syntax error", msg);
+        else if (data?.type === "RULE") showToast("error", "Rule error", msg);
+        else showToast("error", "Invalid step", msg);
       }
     } catch (e) {
-      setResult({ error: String(e) });
+      showToast("error", "Network error", String(e));
     } finally {
       setLoading(false);
     }
@@ -681,753 +1043,790 @@ export default function App() {
       return;
     }
 
-    setLines((prev) => {
-      const target = prev[index];
-      if (!target || target.kind === "premise") return prev;
+    const target = lines[index];
+    if (!target || target.kind === "premise") return;
 
-      const next = prev.filter((_, i) => i !== index);
+    const removedLineNo = index + 1; // 1-based
 
-      let nextOpenBoxes = openBoxes;
+    // Decrement every line-number reference that was after the removed line.
+    function renumberNo(n) {
+      return n > removedLineNo ? n - 1 : n;
+    }
+    function renumberPath(path) {
+      return (path || []).map(renumberNo);
+    }
+    function renumberRef(ref) {
+      if (Array.isArray(ref)) return [renumberNo(ref[0]), renumberNo(ref[1])];
+      return renumberNo(ref);
+    }
 
-      if (target.kind === "assumption") {
-        const removedLineNo = index + 1;
+    // Filter out the removed line, then fix all line-number fields in survivors.
+    const nextLines = lines
+      .filter((_, i) => i !== index)
+      .map(ln => ({
+        ...ln,
+        scopePath: renumberPath(ln.scopePath),
+        refs: (ln.refs || []).map(renumberRef),
+        discharges: (ln.discharges || []).map(renumberNo),
+      }));
 
-        nextOpenBoxes = openBoxes.filter(
-          (box) =>
-            box.assumptionLineNo !== removedLineNo &&
-            !isPrefixPath(target.scopePath || [], box.scopePath || [])
+    // Reconstruct openBoxes from scratch: every assumption line in nextLines
+    // whose goal is not yet derived is an open box. This handles the case where
+    // removing a line un-satisfies a previously auto-closed box.
+    const nextOpenBoxes = nextLines
+      .filter(ln => ln.kind === "assumption" && (ln.scopePath || []).length > 0 && ln.boxGoal)
+      .filter(ln => {
+        const goal = (ln.boxGoal || "").trim();
+        return !nextLines.some(
+          other =>
+            other.kind === "derived" &&
+            samePath(other.scopePath || [], ln.scopePath || []) &&
+            (other.formula || "").trim() === goal
         );
+      })
+      .map(ln => {
+        const assumptionLineNo = (ln.scopePath || [])[ln.scopePath.length - 1];
+        const parentScopePath = (ln.scopePath || []).slice(0, -1);
+        return {
+          kind: ln.boxRule || "IMP_I",
+          assumptionFormula: ln.formula,
+          goalFormula: ln.boxGoal,
+          assumptionLineNo,
+          scopePath: ln.scopePath,
+          parentScopePath,
+        };
+      });
 
-        setOpenBoxes(nextOpenBoxes);
-      }
-
-      setCurrentScopePath(
-        getActiveWritingScope(nextOpenBoxes, [], next)
-      );
-
-      setSaveFeedback(null);
-      setGlobalFeedback(null);
-      return next;
-    });
+    setLines(nextLines);
+    setOpenBoxes(nextOpenBoxes);
+    setCurrentScopePath(getActiveWritingScope(nextOpenBoxes, nextLines));
   }
-    
-
-  const ok = result?.data?.ok === true;
-  const errType = result?.data?.type;
-
-  const pill = (text, bg) => (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "4px 10px",
-        borderRadius: 999,
-        fontSize: 12,
-        fontWeight: 800,
-        background: bg,
-        color: "#111",
-        marginRight: 8,
-      }}
-    >
-      {text}
-    </span>
-  );
-
-  const typeBadge = (type) => {
-    if (!type) return null;
-    return (
-      <span
-        style={{
-          display: "inline-block",
-          padding: "4px 10px",
-          borderRadius: 999,
-          fontSize: 12,
-          fontWeight: 700,
-          marginRight: 8,
-          background: type === "SYNTAX" ? "#fff3cd" : "#e7f1ff",
-          color: "#111",
-          border: "1px solid #ddd",
-        }}
-      >
-        {type}
-      </span>
-    );
-  };
 
   const toolButtonStyle = {
     borderRadius: 10,
     padding: "8px 12px",
-    background: "#1f1f1f",
-    color: "#eee",
-    border: "1px solid #333",
+    background: "#ffffff",
+    color: "#555c6a",
+    border: "1px solid #e8e9ec",
     cursor: "pointer",
-    fontWeight: 800,
+    fontWeight: 500,
     minWidth: 44,
+    fontSize: 14,
   };
 
   const pagePad = "clamp(14px, 2.5vw, 28px)";
 
+  // ── Shared sidebar ────────────────────────────────────────────────────
+  const sidebar = (
+    <div
+      style={{
+        width: 180,
+        height: "100vh",
+        position: "sticky",
+        top: 0,
+        flexShrink: 0,
+        background: "#ffffff",
+        borderRight: "1px solid #edeef1",
+        display: "flex",
+        flexDirection: "column",
+        padding: "20px 12px",
+        boxSizing: "border-box",
+        overflowY: "auto",
+      }}
+    >
+      <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 24, color: "#1a1a1a" }}>
+        ND Tutor
+      </div>
+      <nav style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {[
+          { label: "New Proof", key: "create" },
+          { label: "Saved Proofs", key: "savedProofs" },
+        ].map(({ label, key }) => {
+          const isActive =
+            key === "create"
+              ? page === "create" || page === "workspace"
+              : page === key;
+          return (
+            <button
+              key={key}
+              onClick={() => setPage(key)}
+              style={{
+                textAlign: "left",
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "none",
+                background: isActive ? "#e8faf8" : "transparent",
+                color: isActive ? "#0bc4b0" : "#8a8f99",
+                cursor: "pointer",
+                fontWeight: isActive ? 600 : 500,
+                fontSize: 14,
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </nav>
+    </div>
+  );
 
-  if (page === "savedProofs") {
+  // ── Create page ───────────────────────────────────────────────────────
+  if (page === "create") {
     return (
-      <SavedProofsPage
-        onBackToWorkspace={() => setPage("workspace")}
-        onOpenProof={handleOpenSavedProof}
-      />
+      <div style={{ display: "flex", flexDirection: "row", height: "100vh", overflow: "hidden", background: "#f0f2f5", color: "#1a1a1a", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}>
+        {sidebar}
+        <div style={{ flex: 1, height: "100vh", overflowY: "auto", overflowX: "hidden", padding: pagePad, boxSizing: "border-box" }}>
+          <div style={{ maxWidth: 980, width: "100%", margin: "0 auto", boxSizing: "border-box" }}>
+            <h1 style={{ fontSize: 36, margin: "0 0 4px 0" }}>New Proof</h1>
+            <p style={{ opacity: 0.75, marginTop: 0, marginBottom: 20, fontSize: 14 }}>
+              Enter premises and a conclusion, then start the proof.
+            </p>
+
+            <div
+              style={{
+                background: "#ffffff",
+                border: "none",
+                borderRadius: 18,
+                padding: 20,
+                boxSizing: "border-box",
+                boxShadow: "0 2px 12px rgba(0,0,0,0.07)",
+              }}
+            >
+              <h2 style={{ margin: "0 0 14px 0", fontSize: 17, fontWeight: 700, color: "#1a1a1a" }}>Task</h2>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: isNarrow ? "1fr" : "1.15fr 0.85fr",
+                  gap: 14,
+                  width: "100%",
+                  boxSizing: "border-box",
+                  alignItems: "start",
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, color: "#8a8f99", fontWeight: 500, marginBottom: 6 }}>
+                    Premises (one per line)
+                  </div>
+                  <textarea
+                    data-field="premises"
+                    onFocus={(e) => setActive(e.target)}
+                    value={premisesText}
+                    onChange={(e) => onChangePremisesText(e.target.value)}
+                    rows={4}
+                    style={{
+                      width: "100%",
+                      maxWidth: "100%",
+                      borderRadius: 10,
+                      padding: 10,
+                      background: "#ffffff",
+                      color: "#1a1a1a",
+                      border: "1px solid #e8e9ec",
+                      outline: "none",
+                      resize: "vertical",
+                      boxSizing: "border-box",
+                    }}
+                  />
+                </div>
+
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, color: "#8a8f99", fontWeight: 500, marginBottom: 6 }}>
+                    Conclusion
+                  </div>
+                  <input
+                    data-field="conclusion"
+                    onFocus={(e) => setActive(e.target)}
+                    value={conclusion}
+                    onChange={(e) => setConclusion(e.target.value)}
+                    style={{
+                      width: "100%",
+                      maxWidth: "100%",
+                      borderRadius: 10,
+                      padding: 10,
+                      background: "#ffffff",
+                      color: "#1a1a1a",
+                      border: "1px solid #e8e9ec",
+                      outline: "none",
+                      boxSizing: "border-box",
+                    }}
+                  />
+
+                  <div style={{ marginTop: 12, fontSize: 13, opacity: 0.85 }}>
+                    Quick tips: you can type symbols or words:
+                    <div style={{ opacity: 0.8, marginTop: 6 }}>
+                      <code style={{ color: "#2a2a2a" }}>not / and / or</code>,{" "}
+                      <code style={{ color: "#2a2a2a" }}>! ~ &amp; | -&gt;</code>,{" "}
+                      <code style={{ color: "#2a2a2a" }}>¬ ∧ ∨ →</code>
+                    </div>
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 8 }}>
+                        Insert symbols (click an input first):
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                        {["¬", "∧", "∨", "→", "(", ")"].map((t) => (
+                          <button
+                            key={t}
+                            type="button"
+                            onClick={() => insertToken(t)}
+                            style={toolButtonStyle}
+                          >
+                            {t}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => insertToken(" ")}
+                          style={{ ...toolButtonStyle, minWidth: 72, fontWeight: 700 }}
+                        >
+                          space
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            <button
+              onClick={startProof}
+              disabled={loading}
+              style={{
+                marginTop: 16,
+                borderRadius: 12,
+                padding: "13px 28px",
+                background: loading ? "#d8f5f2" : "#0bc4b0",
+                color: loading ? "#9ad4cf" : "#ffffff",
+                border: "none",
+                cursor: loading ? "not-allowed" : "pointer",
+                fontWeight: 700,
+                fontSize: 15,
+              }}
+            >
+              {loading ? "Working..." : "Start proof →"}
+            </button>
+          </div>
+        </div>
+        <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+      </div>
     );
   }
 
-  return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "#121212",
-        color: "#eee",
-        fontFamily: "system-ui",
-        padding: pagePad,
-        boxSizing: "border-box",
-        overflowX: "hidden",
-        display: "flex",
-        justifyContent: "center",
-      }}
-    >
-      <div
-        style={{
-          maxWidth: 980,
-          width: "100%",
-          margin: "0 auto",
-          boxSizing: "border-box",
-        }}
-      >
-        <h1 style={{ fontSize: 42, margin: 0 }}>ND Tutor</h1>
-        <p style={{ opacity: 0.85, marginTop: 8 }}>
-          Proof workspace demo (React UI → Django proof engine)
-        </p>
-
-        {/* Navigation */}
-        <div style={{ display: "flex", gap: 10, marginTop: 16, marginBottom: 6, flexWrap: "wrap" }}>
-          <button
-            onClick={() => setPage("workspace")}
-            style={{
-              borderRadius: 10,
-              padding: "10px 14px",
-              background: page === "workspace" ? "#2b2b2b" : "#1b1b1b",
-              color: "#eee",
-              border: "1px solid #3a3a3a",
-              cursor: "pointer",
-              fontWeight: 700,
-            }}
-          >
-            Proof Workspace
-          </button>
-
-          <button
-            onClick={() => setPage("savedProofs")}
-            style={{
-              borderRadius: 10,
-              padding: "10px 14px",
-              background: page === "savedProofs" ? "#2b2b2b" : "#1b1b1b",
-              color: "#eee",
-              border: "1px solid #3a3a3a",
-              cursor: "pointer",
-              fontWeight: 700,
-            }}
-          >
-            Saved Proofs
-          </button>
+  // ── Saved Proofs page ─────────────────────────────────────────────────
+  if (page === "savedProofs") {
+    return (
+      <div style={{ display: "flex", flexDirection: "row", height: "100vh", overflow: "hidden", background: "#f0f2f5", color: "#1a1a1a", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}>
+        {sidebar}
+        <div style={{ flex: 1, height: "100vh", overflowY: "auto", overflowX: "hidden" }}>
+          <SavedProofsPage
+            onBackToWorkspace={() => setPage("workspace")}
+            onOpenProof={handleOpenSavedProof}
+            hideBackButton={true}
+          />
         </div>
+        <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+      </div>
+    );
+  }
 
-        {/* Task panel */}
-        <div
-          style={{
-            marginTop: 18,
-            background: "#1b1b1b",
-            border: "1px solid #2a2a2a",
-            borderRadius: 14,
-            padding: 16,
-            boxSizing: "border-box",
-            boxShadow: "0 10px 30px rgba(0,0,0,0.4)",
-          }}
-        >
+  // ── Workspace page ────────────────────────────────────────────────────
+  return (
+    <div style={{ display: "flex", flexDirection: "row", height: "100vh", overflow: "hidden", background: "#f0f2f5", color: "#1a1a1a", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}>
+      {sidebar}
+      <div style={{ flex: 1, height: "100vh", overflowY: "auto", overflowX: "hidden", padding: pagePad, boxSizing: "border-box" }}>
+        <div style={{ maxWidth: 980, width: "100%", margin: "0 auto", boxSizing: "border-box" }}>
+
+          {/* Task header strip */}
           <div
-            style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              marginBottom: 16,
+              flexWrap: "wrap",
+              background: "#ffffff",
+              borderBottom: "1px solid #edeef1",
+              borderRadius: 14,
+              padding: "12px 20px",
+              boxShadow: "0 1px 4px rgba(0,0,0,0.04)",
+            }}
           >
-            <h2 style={{ margin: 0, fontSize: 18 }}>Task</h2>
-
-            {taskLocked && (
-              <span style={{ opacity: 0.75, fontSize: 13 }}>
-                Task is locked (reset proof to edit).
-              </span>
-            )}
-
-            <div style={{ marginLeft: "auto", display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button
-                onClick={startProof}
-                disabled={loading || taskLocked}
-                style={{
-                  borderRadius: 10,
-                  padding: "10px 14px",
-                  background: taskLocked ? "#151515" : "#2b2b2b",
-                  color: taskLocked ? "#777" : "#eee",
-                  border: "1px solid #3a3a3a",
-                  cursor: taskLocked ? "not-allowed" : "pointer",
-                  fontWeight: 800,
-                }}
-              >
-                Start proof
-              </button>
-
-              <button
-                onClick={resetProofToPremises}
-                style={{
-                  borderRadius: 10,
-                  padding: "10px 14px",
-                  background: "#2b2b2b",
-                  color: "#eee",
-                  border: "1px solid #3a3a3a",
-                  cursor: "pointer",
-                  fontWeight: 700,
-                }}
-              >
-                Reset proof
-              </button>
+            <button
+              onClick={resetProofToPremises}
+              style={{
+                borderRadius: 8,
+                padding: "4px 10px",
+                background: "transparent",
+                color: "#0bc4b0",
+                border: "none",
+                cursor: "pointer",
+                fontWeight: 600,
+                fontSize: 13,
+              }}
+            >
+              ← Edit task
+            </button>
+            <div
+              style={{
+                fontSize: 14,
+                color: "#1a1a1a",
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+              }}
+            >
+              Proving:{" "}
+              {premises.length > 0 ? premises.join(", ") : "(no premises)"}
+              {" "}⊢{" "}
+              {conclusion.trim() || "(no conclusion)"}
             </div>
           </div>
 
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: isNarrow ? "1fr" : "1.15fr 0.85fr",
+              gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
               gap: 14,
-              marginTop: 14,
               width: "100%",
               boxSizing: "border-box",
-              alignItems: "start",
             }}
           >
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 6 }}>
-                Premises (one per line)
-              </div>
-              <textarea
-                data-field="premises"
-                onFocus={(e) => setActive(e.target)}
-                value={premisesText}
-                onChange={(e) => onChangePremisesText(e.target.value)}
-                rows={4}
-                disabled={taskLocked}
-                style={{
-                  width: "100%",
-                  maxWidth: "100%",
-                  borderRadius: 10,
-                  padding: 10,
-                  background: taskLocked ? "#141414" : "#101010",
-                  color: "#eee",
-                  border: "1px solid #2a2a2a",
-                  outline: "none",
-                  resize: "vertical",
-                  opacity: taskLocked ? 0.75 : 1,
-                  boxSizing: "border-box",
-                }}
-              />
-            </div>
-
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 6 }}>
-                Conclusion
-              </div>
-              <input
-                data-field="conclusion"
-                onFocus={(e) => setActive(e.target)}
-                value={conclusion}
-                onChange={(e) => setConclusion(e.target.value)}
-                disabled={taskLocked}
-                style={{
-                  width: "100%",
-                  maxWidth: "100%",
-                  borderRadius: 10,
-                  padding: 10,
-                  background: taskLocked ? "#141414" : "#101010",
-                  color: "#eee",
-                  border: "1px solid #2a2a2a",
-                  outline: "none",
-                  opacity: taskLocked ? 0.75 : 1,
-                  boxSizing: "border-box",
-                }}
-              />
-
-              <div style={{ marginTop: 12, fontSize: 13, opacity: 0.85 }}>
-                Quick tips: you can type symbols or words:
-                <div style={{ opacity: 0.8, marginTop: 6 }}>
-                  <code style={{ color: "#ddd" }}>not / and / or</code>,{" "}
-                  <code style={{ color: "#ddd" }}>! ~ &amp; | -&gt;</code>,{" "}
-                  <code style={{ color: "#ddd" }}>¬ ∧ ∨ →</code>
-                </div>
-
-                <div style={{ marginTop: 12 }}>
-                  <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 8 }}>
-                    Insert symbols (click an input first):
-                  </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                    {["¬", "∧", "∨", "→", "(", ")"].map((t) => (
-                      <button
-                        key={t}
-                        type="button"
-                        onClick={() => insertToken(t)}
-                        style={toolButtonStyle}
-                      >
-                        {t}
-                      </button>
-                    ))}
-                    <button
-                      type="button"
-                      onClick={() => insertToken(" ")}
-                      style={{ ...toolButtonStyle, minWidth: 72, fontWeight: 700 }}
-                    >
-                      space
-                    </button>
-                  </div>
-                </div>
-
-                {!taskLocked && (
-                  <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
-                    When you're ready, click <b>Start proof</b> to syntax-check + normalise
-                    the task.
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
-            gap: 14,
-            marginTop: 14,
-            width: "100%",
-            boxSizing: "border-box",
-          }}
-        >
-          {/* Proof */}
-          <div
-            style={{
-              background: "#1b1b1b",
-              border: "1px solid #2a2a2a",
-              borderRadius: 14,
-              padding: 16,
-              minWidth: 0,
-              boxSizing: "border-box",
-            }}
-          >
+            {/* Proof */}
             <div
               style={{
-                display: "flex",
-                alignItems: "baseline",
-                gap: 10,
-                marginBottom: 10,
-                flexWrap: "wrap",
+                background: "#ffffff",
+                border: "none",
+                borderRadius: 18,
+                padding: 20,
+                minWidth: 0,
+                boxSizing: "border-box",
+                boxShadow: "0 2px 12px rgba(0,0,0,0.07)",
               }}
             >
-              <h2 style={{ margin: 0, fontSize: 18 }}>Proof</h2>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "baseline",
+                  gap: 10,
+                  marginBottom: 10,
+                  flexWrap: "wrap",
+                }}
+              >
+                <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: "#1a1a1a" }}>Proof</h2>
 
-              <span style={{ opacity: 0.75, fontSize: 12 }}>
-                {taskLocked
-                  ? `${lines.length} lines`
-                  : `${displayedLines.length} lines (preview)`}
-              </span>
+                <span style={{ opacity: 0.75, fontSize: 12 }}>
+                  {taskLocked
+                    ? `${lines.length} lines`
+                    : `${displayedLines.length} lines (preview)`}
+                </span>
 
-              {taskLocked && (
-                <div
-                  style={{
-                    marginLeft: "auto",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    flexWrap: "wrap",
-                    justifyContent: "flex-end",
-                  }}
-                >
-                  <span style={{ opacity: 0.9, fontSize: 12 }}>
-                    Goal:{" "}
-                    <span
-                      style={{
-                        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                      }}
-                    >
-                      {conclusion.trim() || "(none)"}
-                    </span>
-                  </span>
-
-                {persistentConclusionBadge.show && (
-                  <span
-                    style={{
-                      display: "inline-block",
-                      padding: "4px 10px",
-                      borderRadius: 999,
-                      fontSize: 12,
-                      fontWeight: 800,
-                      background: "#102418",
-                      color: "#d1fae5",
-                      border: "1px solid #224d32",
-                    }}
-                  >
-                    Conclusion derived on line {persistentConclusionBadge.lineNo} ✅
-                  </span>
-                )}
-                </div>
-              )}
-            </div>
-
-            {taskLocked && (
-              <div style={{ opacity: 0.7, fontSize: 12, marginBottom: 10 }}>
-                Current scope:{" "}
-                {currentScopePath.length
-                  ? `[${currentScopePath.join(", ")}]`
-                  : "top level"}
-              </div>
-            )}
-
-            {(() => {
-              function renderLineCard(ln) {
-                const lineNo = displayedLines.indexOf(ln) + 1;
-                const isHighlighted = refsPreview.includes(lineNo);
-
-                return (
+                {taskLocked && (
                   <div
-                    key={`line-${lineNo}`}
                     style={{
-                      display: "grid",
-                      gridTemplateColumns: "54px 1fr 100px",
+                      marginLeft: "auto",
+                      display: "flex",
                       alignItems: "center",
                       gap: 10,
-                      background: isHighlighted ? "#171717" : "#141414",
-                      border: isHighlighted ? "1px solid #5a5a5a" : "1px solid #2a2a2a",
-                      borderRadius: 12,
-                      padding: "10px 12px",
-                      minWidth: 0,
-                      boxSizing: "border-box",
+                      flexWrap: "wrap",
+                      justifyContent: "flex-end",
                     }}
                   >
-                    <div style={{ opacity: 0.8 }}>#{lineNo}</div>
-
-                    <div style={{ minWidth: 0 }}>
-                      <div
+                    <span style={{ opacity: 0.9, fontSize: 12 }}>
+                      Goal:{" "}
+                      <span
                         style={{
                           fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                          overflowWrap: "anywhere",
                         }}
                       >
-                        {ln.formula}
-                      </div>
+                        {conclusion.trim() || "(none)"}
+                      </span>
+                    </span>
 
-                      {ln.kind === "premise" && (
-                        <div style={{ opacity: 0.65, fontSize: 12, marginTop: 4 }}>
-                          premise
-                        </div>
-                      )}
-
-                      {ln.kind === "assumption" && (
-                        <div
-                          style={{
-                            opacity: 0.85,
-                            fontSize: 12,
-                            marginTop: 4,
-                            fontWeight: 700,
-                          }}
-                        >
-                          assumption
-                        </div>
-                      )}
-
-                      {ln.kind === "derived" && (
-                        <div style={{ opacity: 0.7, fontSize: 12, marginTop: 4 }}>
-                          {(ruleLabelByValue[ln.rule] || ln.rule)} ({(ln.refs || []).join(", ")})
-                        </div>
-                      )}
-                    </div>
-
-                    <button
-                      onClick={() => removeLine(lineNo - 1)}
-                      disabled={taskLocked && ln.kind === "premise"}
+                  {persistentConclusionBadge.show && (
+                    <span
                       style={{
-                        borderRadius: 10,
-                        padding: "8px 10px",
-                        background:
-                          taskLocked && ln.kind === "premise" ? "#151515" : "#1f1f1f",
-                        color: taskLocked && ln.kind === "premise" ? "#777" : "#ddd",
-                        border: "1px solid #333",
-                        cursor:
-                          taskLocked && ln.kind === "premise" ? "not-allowed" : "pointer",
-                        fontWeight: 700,
-                        opacity: taskLocked && ln.kind === "premise" ? 0.7 : 1,
+                        display: "inline-block",
+                        padding: "4px 10px",
+                        borderRadius: 999,
+                        fontSize: 12,
+                        fontWeight: 800,
+                        background: "#e8faf8",
+                        color: "#0bc4b0",
+                        border: "1px solid #0bc4b0",
                       }}
                     >
-                      Remove
-                    </button>
+                      Conclusion derived on line {persistentConclusionBadge.lineNo} ✅
+                    </span>
+                  )}
                   </div>
-                );
-              }
+                )}
+              </div>
 
-              function renderBox(boxLine) {
-                const lineNo = displayedLines.indexOf(boxLine) + 1;
-                const items = getDirectItemsForScope(boxLine.scopePath || [], displayedLines);
-                const goalReached = boxGoalReached(boxLine, displayedLines);
-                const isOpenBox =
-                  activeBox &&
-                  activeBox.assumptionLineNo === lineNo;
+              {taskLocked && (
+                <div style={{ opacity: 0.7, fontSize: 12, marginBottom: 10 }}>
+                  Current scope:{" "}
+                  {currentScopePath.length
+                    ? `[${currentScopePath.join(", ")}]`
+                    : "top level"}
+                </div>
+              )}
 
-                return (
-                  <div
-                    key={`box-${lineNo}`}
-                    style={{
-                      border: "3px solid #d8d8d8",
-                      borderColor: isOpenBox ? "#9aa6ff" : "#6d6d6d",
-                      borderRadius: 2,
-                      padding: 12,
-                      marginTop: 8,
-                      marginBottom: 8,
-                      background: "#111",
-                    }}
-                  >
+              {(() => {
+                function renderLineCard(ln) {
+                  const lineNo = displayedLines.indexOf(ln) + 1;
+                  const isHighlighted = refsPreview.some((ref) =>
+                    Array.isArray(ref)
+                      ? lineNo >= ref[0] && lineNo <= ref[1]
+                      : ref === lineNo
+                  );
+
+                  return (
                     <div
+                      key={`line-${lineNo}`}
                       style={{
                         display: "flex",
-                        justifyContent: "space-between",
                         alignItems: "flex-start",
-                        gap: 12,
-                        marginBottom: 10,
-                        flexWrap: "wrap",
+                        gap: 10,
+                        width: "100%",
+                        background: isHighlighted ? "#eef4ff" : "#f8f9fb",
+                        border: isHighlighted ? "1px solid #c7d2fe" : "1px solid #edeef1",
+                        borderRadius: 14,
+                        padding: "10px 14px",
+                        minWidth: 0,
+                        boxSizing: "border-box",
                       }}
                     >
-                      <div style={{ fontSize: 12, opacity: 0.8 }}>
-                        {boxLine.boxRule === "IMP_I" ? "→I subproof" : "subproof"}
+                      <div style={{
+                        color: "#0bc4b0",
+                        fontWeight: 700,
+                        fontSize: 13,
+                        flexShrink: 0,
+                        minWidth: 28,
+                        paddingTop: 2,
+                      }}>
+                        #{lineNo}
                       </div>
 
-                      <div
+                      <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
+                        <div
+                          style={{
+                            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                            fontWeight: 600,
+                            fontSize: 14,
+                            color: "#1a1a1a",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                          title={ln.formula}
+                        >
+                          {ln.formula}
+                        </div>
+
+                        {ln.kind === "premise" && (
+                          <div style={{ fontSize: 12, color: "#8a8f99", marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            premise
+                          </div>
+                        )}
+
+                        {ln.kind === "assumption" && (
+                          <div style={{ fontSize: 12, color: "#0bc4b0", fontWeight: 600, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            assumption
+                          </div>
+                        )}
+
+                        {ln.kind === "derived" && (
+                          <div style={{ fontSize: 12, color: "#8a8f99", marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {(ruleLabelByValue[ln.rule] || ln.rule)}{(ln.refs || []).length > 0 ? ` (${(ln.refs || []).map(formatRef).join(", ")})` : ""}
+                          </div>
+                        )}
+                      </div>
+
+                      <button
+                        onClick={() => removeLine(lineNo - 1)}
+                        disabled={taskLocked && ln.kind === "premise"}
                         style={{
-                          textAlign: "right",
-                          fontSize: 13,
-                          lineHeight: 1.4,
+                          flexShrink: 0,
+                          alignSelf: "flex-start",
+                          borderRadius: 10,
+                          padding: "6px 10px",
+                          background: "#ffffff",
+                          color: taskLocked && ln.kind === "premise" ? "#8a8f99" : "#555c6a",
+                          border: "1px solid #e8e9ec",
+                          cursor: taskLocked && ln.kind === "premise" ? "not-allowed" : "pointer",
+                          fontWeight: 500,
+                          fontSize: 12,
+                          opacity: taskLocked && ln.kind === "premise" ? 0.5 : 1,
                         }}
                       >
-                        {!!boxLine.boxGoal && (
-                          <div>
-                            Goal:{" "}
-                            <span
-                              style={{
-                                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                                fontWeight: 800,
-                              }}
-                            >
-                              {boxLine.boxGoal}
-                            </span>
-                          </div>
-                        )}
+                        Remove
+                      </button>
+                    </div>
+                  );
+                }
 
-                        {!!boxLine.boxGoal && (
-                          <div style={{ opacity: 0.85 }}>
-                            {goalReached ? "derived ✅" : "not derived yet"}
-                          </div>
-                        )}
+                function renderBox(boxLine, depth = 0) {
+                  const lineNo = displayedLines.indexOf(boxLine) + 1;
+                  const items = getDirectItemsForScope(boxLine.scopePath || [], displayedLines);
+                  const goalReached = boxGoalReached(boxLine, displayedLines);
+                  const isOpenBox =
+                    activeBox &&
+                    activeBox.assumptionLineNo === lineNo;
+                  const color = getSubproofColor(depth);
+
+                  return (
+                    <div
+                      key={`box-${lineNo}`}
+                      style={{
+                        border: isOpenBox ? `2px solid ${color.border}` : `1px solid ${color.border}`,
+                        borderRadius: 12,
+                        padding: 14,
+                        marginTop: 8,
+                        marginBottom: 8,
+                        background: color.bg,
+                        minWidth: 0,
+                        boxSizing: "border-box",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "flex-start",
+                          gap: 12,
+                          marginBottom: 10,
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <div style={{ fontSize: 12, color: color.label, fontWeight: 600 }}>
+                          {boxLine.boxRule === "IMP_I" ? "→I subproof" : "subproof"}
+                        </div>
+
+                        <div
+                          style={{
+                            textAlign: "right",
+                            fontSize: 13,
+                            lineHeight: 1.4,
+                          }}
+                        >
+                          {!!boxLine.boxGoal && (
+                            <div>
+                              Goal:{" "}
+                              <span
+                                style={{
+                                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                                  fontWeight: 800,
+                                }}
+                              >
+                                {boxLine.boxGoal}
+                              </span>
+                            </div>
+                          )}
+
+                          {!!boxLine.boxGoal && (
+                            <div style={{ opacity: 0.85 }}>
+                              {goalReached ? "derived ✅" : "not derived yet"}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div style={{ display: "grid", gap: 10, minWidth: 0 }}>
+                        {renderLineCard(boxLine)}
+
+                        {items
+                          .filter((item) => !(item.type === "line" && item.line === boxLine))
+                          .map((item) =>
+                            item.type === "line"
+                              ? renderLineCard(item.line)
+                              : renderBox(item.line, depth + 1)
+                          )}
                       </div>
                     </div>
+                  );
+                }
 
+                function renderScope(scopePath) {
+                  const items = getDirectItemsForScope(scopePath, displayedLines);
+
+                  return (
                     <div style={{ display: "grid", gap: 8 }}>
-                      {renderLineCard(boxLine)}
-
-                      {items
-                        .filter((item) => !(item.type === "line" && item.line === boxLine))
-                        .map((item) =>
-                          item.type === "line"
-                            ? renderLineCard(item.line)
-                            : renderBox(item.line)
-                        )}
+                      {items.map((item) =>
+                        item.type === "line" ? renderLineCard(item.line) : renderBox(item.line)
+                      )}
                     </div>
-                  </div>
-                );
-              }
+                  );
+                }
 
-              function renderScope(scopePath) {
-                const items = getDirectItemsForScope(scopePath, displayedLines);
+                return renderScope([]);
+              })()}
 
-                return (
-                  <div style={{ display: "grid", gap: 8 }}>
-                    {items.map((item) =>
-                      item.type === "line" ? renderLineCard(item.line) : renderBox(item.line)
-                    )}
-                  </div>
-                );
-              }
-
-              return renderScope([]);
-            })()}
-
-            {!taskLocked && (
-              <div style={{ opacity: 0.75, fontSize: 12, marginBottom: 10 }}>
-                Preview mode: these lines reflect your premises. Click <b>Start proof</b> to
-                lock the task and begin.
-              </div>
-            )}
-
-            <div style={{ marginTop: 10, opacity: 0.75, fontSize: 12, display: "grid", gap: 4 }}>
-              <div>Lines can only be added via validated steps.</div>
-              {taskLocked && (
-                <div>Use <b>Check Proof</b> to see the current global status of the proof.</div>
+              {!taskLocked && (
+                <div style={{ opacity: 0.75, fontSize: 12, marginBottom: 10 }}>
+                  Preview mode: these lines reflect your premises. Click <b>Start proof</b> to
+                  lock the task and begin.
+                </div>
               )}
+
+              <div style={{ marginTop: 10, opacity: 0.75, fontSize: 12, display: "grid", gap: 4 }}>
+                <div>Lines can only be added via validated steps.</div>
+                {taskLocked && (
+                  <div>Use <b>Check Proof</b> to see the current global status of the proof.</div>
+                )}
+              </div>
             </div>
-          </div>
 
-          {/* Proposed Step */}
-          <div
-            style={{
-              background: "#1b1b1b",
-              border: "1px solid #2a2a2a",
-              borderRadius: 14,
-              padding: 16,
-              minWidth: 0,
-              boxSizing: "border-box",
-            }}
-          >
-            <h2 style={{ margin: "0 0 10px 0", fontSize: 18 }}>Propose Step</h2>
-
-            <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 6 }}>Formula</div>
-            <input
-              data-field="step"
-              onFocus={(e) => setActive(e.target)}
-              value={stepFormula}
-              onChange={(e) => setStepFormula(e.target.value)}
-              placeholder={
-                rule === "IMP_I"
-                  ? "e.g. C -> D"
-                  : "Enter the formula for the new derived line"
-              }
+            {/* Proposed Step */}
+            <div
               style={{
-                width: "100%",
-                maxWidth: "100%",
-                borderRadius: 10,
-                padding: 10,
-                background: "#101010",
-                color: "#eee",
-                border: "1px solid #2a2a2a",
-                outline: "none",
+                background: "#ffffff",
+                border: "none",
+                borderRadius: 18,
+                padding: 20,
+                minWidth: 0,
                 boxSizing: "border-box",
-              }}
-            />
-
-            <div style={{ marginTop: 12, fontSize: 13, opacity: 0.85, marginBottom: 6 }}>
-              Rule
-            </div>
-            <select
-              value={rule}
-              onChange={(e) => setRule(e.target.value)}
-              style={{
-                width: "100%",
-                maxWidth: "100%",
-                borderRadius: 10,
-                padding: 10,
-                background: "#101010",
-                color: "#eee",
-                border: "1px solid #2a2a2a",
-                outline: "none",
-                boxSizing: "border-box",
+                boxShadow: "0 2px 12px rgba(0,0,0,0.07)",
               }}
             >
-              {RULES.map((r) => (
-                <option key={r.value} value={r.value}>
-                  {r.label}
-                </option>
-              ))}
-            </select>
+              <h2 style={{ margin: "0 0 10px 0", fontSize: 17, fontWeight: 700, color: "#1a1a1a" }}>Propose Step</h2>
 
-            {rule === "IMP_I" && (
-              <button
-                onClick={openImplicationBox}
-                disabled={loading || !taskLocked || !stepFormula.trim()}
+              <div style={{ fontSize: 13, color: "#8a8f99", fontWeight: 500, marginBottom: 6 }}>Formula</div>
+              <input
+                data-field="step"
+                onFocus={(e) => setActive(e.target)}
+                value={stepFormula}
+                onChange={(e) => setStepFormula(e.target.value)}
+                placeholder={
+                  rule === "IMP_I"
+                    ? "e.g. C -> D"
+                    : "Enter the formula for the new derived line"
+                }
                 style={{
-                  marginTop: 12,
+                  width: "100%",
+                  maxWidth: "100%",
+                  borderRadius: 10,
+                  padding: 10,
+                  background: "#ffffff",
+                  color: "#1a1a1a",
+                  border: "1px solid #e8e9ec",
+                  outline: "none",
+                  boxSizing: "border-box",
+                }}
+              />
+
+              <div style={{ marginTop: 12, fontSize: 13, color: "#8a8f99", fontWeight: 500, marginBottom: 6 }}>
+                Rule
+              </div>
+              <select
+                value={rule}
+                onChange={(e) => setRule(e.target.value)}
+                style={{
+                  width: "100%",
+                  maxWidth: "100%",
+                  borderRadius: 10,
+                  padding: 10,
+                  background: "#ffffff",
+                  color: "#1a1a1a",
+                  border: "1px solid #e8e9ec",
+                  outline: "none",
+                  boxSizing: "border-box",
+                }}
+              >
+                {RULES.map((r) => (
+                  <option key={r.value} value={r.value}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+
+              {rule === "IMP_I" && (
+                <button
+                  onClick={openImplicationBox}
+                  disabled={loading || !taskLocked || !stepFormula.trim()}
+                  style={{
+                    marginTop: 12,
+                    width: "100%",
+                    borderRadius: 12,
+                    padding: "12px 14px",
+                    background: taskLocked && stepFormula.trim() ? "#ffffff" : "#f5f6f8",
+                    color: taskLocked && stepFormula.trim() ? "#555c6a" : "#8a8f99",
+                    border: "1px solid #e8e9ec",
+                    cursor: taskLocked && stepFormula.trim() ? "pointer" : "not-allowed",
+                    fontWeight: 500,
+                  }}
+                >
+                  Open →I Box
+                </button>
+              )}
+
+              <div style={{ marginTop: 12, fontSize: 13, color: "#8a8f99", fontWeight: 500, marginBottom: 6 }}>
+                References — line numbers or ranges (e.g. <code>3-5</code>)
+              </div>
+              <input
+                data-field="refs"
+                onFocus={(e) => setActive(e.target)}
+                value={refsText}
+                onChange={(e) => setRefsText(e.target.value)}
+                placeholder={
+                  rule === "REIT"
+                    ? "e.g. 3"
+                    : rule === "IMP_I"
+                    ? "e.g. 3-5  or  3, 5"
+                    : "e.g. 1, 2  or  3-5"
+                }
+                style={{
+                  width: "100%",
+                  maxWidth: "100%",
+                  borderRadius: 10,
+                  padding: 10,
+                  background: "#ffffff",
+                  color: "#1a1a1a",
+                  border: "1px solid #e8e9ec",
+                  outline: "none",
+                  boxSizing: "border-box",
+                }}
+              />
+
+              <button
+                onClick={validateAndAdd}
+                disabled={loading || !taskLocked}
+                style={{
+                  marginTop: 14,
                   width: "100%",
                   borderRadius: 12,
                   padding: "12px 14px",
-                  background:
-                    taskLocked && stepFormula.trim() ? "#2b2b2b" : "#151515",
-                  color: taskLocked && stepFormula.trim() ? "#eee" : "#777",
-                  border: "1px solid #3a3a3a",
-                  cursor:
-                    taskLocked && stepFormula.trim() ? "pointer" : "not-allowed",
-                  fontWeight: 800,
+                  background: taskLocked ? "#0bc4b0" : "#d8f5f2",
+                  color: taskLocked ? "#ffffff" : "#9ad4cf",
+                  border: "none",
+                  cursor: taskLocked ? "pointer" : "not-allowed",
+                  fontWeight: 700,
+                  fontSize: 15,
+                }}
+                title={
+                  taskLocked
+                    ? "Validate the proposed step and add it to the proof."
+                    : "Start the proof first."
+                }
+              >
+                {loading ? "Working..." : "Validate & Add"}
+              </button>
+
+              <button
+                onClick={checkProof}
+                disabled={checkingProof || !taskLocked}
+                style={{
+                  marginTop: 10,
+                  width: "100%",
+                  borderRadius: 12,
+                  padding: "12px 14px",
+                  background: taskLocked ? "#0bc4b0" : "#d8f5f2",
+                  color: taskLocked ? "#ffffff" : "#9ad4cf",
+                  border: "none",
+                  cursor: taskLocked ? "pointer" : "not-allowed",
+                  fontWeight: 700,
+                  fontSize: 15,
                 }}
               >
-                Open →I Box
+                {checkingProof ? "Checking..." : "Check Proof"}
               </button>
-            )}
-
-            <div style={{ marginTop: 12, fontSize: 13, opacity: 0.85, marginBottom: 6 }}>
-              References (comma-separated line numbers)
-            </div>
-            <input
-              data-field="refs"
-              onFocus={(e) => setActive(e.target)}
-              value={refsText}
-              onChange={(e) => setRefsText(e.target.value)}
-              placeholder={
-                rule === "IMP_I"
-                  ? "e.g., assumptionLine, finalLine"
-                  : "e.g., 1, 2"
-              }
-              style={{
-                width: "100%",
-                maxWidth: "100%",
-                borderRadius: 10,
-                padding: 10,
-                background: "#101010",
-                color: "#eee",
-                border: "1px solid #2a2a2a",
-                outline: "none",
-                boxSizing: "border-box",
-              }}
-            />
-
-            <button
-              onClick={validateAndAdd}
-              disabled={loading || !taskLocked}
-              style={{
-                marginTop: 14,
-                width: "100%",
-                borderRadius: 12,
-                padding: "12px 14px",
-                background: taskLocked ? "#2b2b2b" : "#151515",
-                color: taskLocked ? "#eee" : "#777",
-                border: "1px solid #3a3a3a",
-                cursor: taskLocked ? "pointer" : "not-allowed",
-                fontWeight: 800,
-              }}
-              title={
-                taskLocked
-                  ? "Validate the proposed step and add it to the proof."
-                  : "Start the proof first."
-              }
-            >
-              {loading ? "Working..." : "Validate & Add"}
-            </button>
-
-            <button
-              onClick={checkProof}
-              disabled={checkingProof || !taskLocked}
-              style={{
-                marginTop: 10,
-                width: "100%",
-                borderRadius: 12,
-                padding: "12px 14px",
-                background: taskLocked ? "#2b2b2b" : "#151515",
-                color: taskLocked ? "#eee" : "#777",
-                border: "1px solid #3a3a3a",
-                cursor: taskLocked ? "pointer" : "not-allowed",
-                fontWeight: 800,
-              }}
-            >
-              {checkingProof ? "Checking..." : "Check Proof"}
-            </button>
 
               <button
                 onClick={saveProof}
@@ -1437,153 +1836,39 @@ export default function App() {
                   width: "100%",
                   borderRadius: 12,
                   padding: "12px 14px",
-                  background: taskLocked ? "#2b2b2b" : "#151515",
-                  color: taskLocked ? "#eee" : "#777",
-                  border: "1px solid #3a3a3a",
+                  background: taskLocked ? "#0bc4b0" : "#d8f5f2",
+                  color: taskLocked ? "#ffffff" : "#9ad4cf",
+                  border: "none",
                   cursor: taskLocked ? "pointer" : "not-allowed",
-                  fontWeight: 800,
+                  fontWeight: 700,
+                  fontSize: 15,
                 }}
               >
                 {savingProof ? "Saving..." : "Save Proof"}
               </button>
 
-            {!taskLocked && (
-              <div style={{ marginTop: 10, opacity: 0.75, fontSize: 12 }}>
-                Start the proof first to validate steps.
-              </div>
-            )}
-
-            <div
-              style={{
-                marginTop: 14,
-                background: "#141414",
-                border: "1px solid #2a2a2a",
-                borderRadius: 12,
-                padding: 12,
-                minHeight: 88,
-                boxSizing: "border-box",
-              }}
-            >
-              {!result && !globalFeedback ? (
-                <div style={{ opacity: 0.75 }}>No feedback yet.</div>
-              ) : result?.error ? (
-                <div>
-                  {typeBadge("NETWORK")}
-                  <span style={{ fontWeight: 700 }}>Request failed:</span>{" "}
-                  <span style={{ opacity: 0.9 }}>{result.error}</span>
-                </div>
-              ) : result ? (
-                <div>
-                  <div style={{ marginBottom: 8 }}>
-                    {ok ? pill("VALID", "#d1fae5") : pill("INVALID", "#fee2e2")}
-                    {!ok && typeBadge(errType)}
-                    <span style={{ opacity: 0.8 }}>HTTP {result.status}</span>
-                  </div>
-
-                  <div style={{ fontWeight: 700, marginBottom: 6 }}>
-                    {result.data.message || "(No message)"}
-                  </div>
-
-                  <details style={{ marginTop: 8, opacity: 0.9 }}>
-                    <summary style={{ cursor: "pointer" }}>Show raw response</summary>
-                    <pre
-                      style={{
-                        marginTop: 8,
-                        whiteSpace: "pre-wrap",
-                        background: "#0f0f0f",
-                        padding: 10,
-                        borderRadius: 10,
-                        border: "1px solid #222",
-                        overflowX: "auto",
-                      }}
-                    >
-                      {JSON.stringify(result.data, null, 2)}
-                    </pre>
-                  </details>
-                </div>
-              ) : null}
-
-              {globalFeedback && (
-                <div
-                  style={{
-                    marginTop: 12,
-                    padding: 12,
-                    borderRadius: 12,
-                    background: globalFeedback.complete ? "#102418" : "#161616",
-                    border: globalFeedback.complete ? "1px solid #224d32" : "1px solid #343434",
-                    color: globalFeedback.complete ? "#d1fae5" : "#eee",
-                  }}
-                >
-                  <div style={{ fontWeight: 800, marginBottom: 6 }}>
-                    {globalFeedback.complete ? "Proof status: Complete ✅" : "Proof status: In progress"}
-                  </div>
-
-                  <div style={{ marginBottom: 8 }}>
-                    {globalFeedback.message}
-                  </div>
-
-                  {Array.isArray(globalFeedback.progress) && globalFeedback.progress.length > 0 && (
-                    <div style={{ marginTop: 8 }}>
-                      <div style={{ fontWeight: 700, marginBottom: 4 }}>
-                        {globalFeedback.complete ? "Summary" : "Progress"}
-                      </div>
-                      <div style={{ display: "grid", gap: 4 }}>
-                        {globalFeedback.progress.map((item, idx) => (
-                          <div key={idx} style={{ opacity: 0.9, fontSize: 13 }}>
-                            • {item}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {Array.isArray(globalFeedback.hints) && globalFeedback.hints.length > 0 && (
-                    <div style={{ marginTop: 10 }}>
-                      <div style={{ fontWeight: 700, marginBottom: 4 }}>Hint</div>
-                      <div style={{ display: "grid", gap: 4 }}>
-                        {globalFeedback.hints.map((item, idx) => (
-                          <div key={idx} style={{ opacity: 0.9, fontSize: 13 }}>
-                            • {item}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {saveFeedback && (
-                <div
-                  style={{
-                    marginTop: 12,
-                    padding: 12,
-                    borderRadius: 12,
-                    background: saveFeedback.ok ? "#102418" : "#2a1616",
-                    border: saveFeedback.ok ? "1px solid #224d32" : "1px solid #5a2a2a",
-                    color: saveFeedback.ok ? "#d1fae5" : "#fee2e2",
-                  }}
-                >
-                  <div style={{ fontWeight: 800, marginBottom: 6 }}>
-                    {saveFeedback.ok ? "Save status: Saved ✅" : "Save status: Failed"}
-                  </div>
-
-                  <div>{saveFeedback.message}</div>
-
-                  {saveFeedback.ok && saveFeedback.proofId && (
-                    <div style={{ marginTop: 6, opacity: 0.85, fontSize: 13 }}>
-                      Proof ID: {saveFeedback.proofId}
-                    </div>
-                  )}
+              {!taskLocked && (
+                <div style={{ marginTop: 10, color: "#8a8f99", fontSize: 12 }}>
+                  Start the proof first to validate steps.
                 </div>
               )}
             </div>
+
+            {/* Goal Tree — card is rendered inside GoalTree itself */}
+            <GoalTree
+              lines={lines}
+              openBoxes={openBoxes}
+              conclusion={conclusion}
+              checkedProofStatus={checkedProofStatus}
+            />
+          </div>
+
+          <div style={{ opacity: 0.7, marginTop: 14, fontSize: 12 }}>
+            Note: premises are inserted as initial proof lines only after you click <b>Start proof</b>.
           </div>
         </div>
-
-        <div style={{ opacity: 0.7, marginTop: 14, fontSize: 12 }}>
-          Note: premises are inserted as initial proof lines only after you click <b>Start proof</b>.
-        </div>
       </div>
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

@@ -19,8 +19,17 @@ from .rules import (
     iff_intro,
     neg_elim,
     neg_intro,
-
+    reiteration,
 )
+
+
+def _is_range(ref) -> bool:
+    """True if ref is a two-element list/tuple of positive ints (a subproof range)."""
+    return (
+        isinstance(ref, (list, tuple))
+        and len(ref) == 2
+        and all(isinstance(x, int) and x > 0 for x in ref)
+    )
 
 
 @dataclass
@@ -238,11 +247,9 @@ def validate_task_payload(body: Dict[str, Any]) -> Dict[str, Any]:
         normalised_premises = []
         for p in premises:
             p_norm = normalise_only(p.strip())
-            parse_formula(p_norm)   # syntax check
-            normalised_premises.append(p_norm)
+            normalised_premises.append(formula_to_string(parse_formula(p_norm)))
 
-        conclusion_norm = normalise_only(conclusion)
-        parse_formula(conclusion_norm)
+        conclusion_norm = formula_to_string(parse_formula(normalise_only(conclusion)))
 
         return {
             "ok": True,
@@ -269,12 +276,15 @@ def validate_step_payload(body: Dict[str, Any]) -> ValidationResult:
 
     formula_str = (step.get("formula") or "").strip()
     normalised_step = normalise_only(formula_str)
-    refs: List[int] = step.get("refs") or []
+    # Each element is either an int (line number) or a [i, j] list (subproof range).
+    refs: List = step.get("refs") or []
     current_scope_path = tuple(step.get("scopePath") or [])
 
-    # Parse proposed formula (parse the normalised string)
+    # Parse proposed formula, then reprint via formula_to_string so the returned
+    # `normalised` is always printer-canonical (same format as open_subproof).
     try:
         proposed_ast = parse_formula(normalised_step)
+        normalised_step = formula_to_string(proposed_ast)
     except (ValueError, ParseError) as e:
         return ValidationResult(False, "SYNTAX", str(e), normalised=normalised_step)
 
@@ -295,8 +305,8 @@ def validate_step_payload(body: Dict[str, Any]) -> ValidationResult:
 
         if rule in ("AND_E1", "AND_E2"):
             if len(refs) != 1:
-                raise RuleError(f"{rule} requires exactly 1 referenced line.")
-            ref_ast = ctx.get_line_ast(refs[0])
+                raise RuleError(f"{rule} requires exactly 1 ref.")
+            ref_ast = ctx.resolve_ref(refs[0], current_scope_path)
             expected = and_elim(ref_ast, 1 if rule == "AND_E1" else 2)
             if proposed_ast != expected:
                 raise RuleError("Incorrect result for ∧-Elimination.")
@@ -304,9 +314,9 @@ def validate_step_payload(body: Dict[str, Any]) -> ValidationResult:
 
         if rule == "AND_I":
             if len(refs) != 2:
-                raise RuleError("AND_I requires exactly 2 referenced lines.")
-            a_ast = ctx.get_line_ast(refs[0])
-            b_ast = ctx.get_line_ast(refs[1])
+                raise RuleError("AND_I requires exactly 2 refs.")
+            a_ast = ctx.resolve_ref(refs[0], current_scope_path)
+            b_ast = ctx.resolve_ref(refs[1], current_scope_path)
 
             if not isinstance(proposed_ast, BinOp) or proposed_ast.op != "∧":
                 raise RuleError("AND_I requires the proposed formula to be a conjunction (A ∧ B).")
@@ -322,11 +332,11 @@ def validate_step_payload(body: Dict[str, Any]) -> ValidationResult:
 
         if rule == "OR_E":
             if len(refs) != 3:
-                raise RuleError("OR_E requires exactly 3 referenced lines.")
+                raise RuleError("OR_E requires exactly 3 refs.")
 
-            a1 = ctx.get_line_ast(refs[0])
-            a2 = ctx.get_line_ast(refs[1])
-            a3 = ctx.get_line_ast(refs[2])
+            a1 = ctx.resolve_ref(refs[0], current_scope_path)
+            a2 = ctx.resolve_ref(refs[1], current_scope_path)
+            a3 = ctx.resolve_ref(refs[2], current_scope_path)
 
             expected = or_elim(a1, a2, a3)
 
@@ -338,71 +348,71 @@ def validate_step_payload(body: Dict[str, Any]) -> ValidationResult:
                 message="Step valid (∨-Elimination).",
                 normalised=normalised_step,
             )
-        
+
         if rule in ("OR_I1", "OR_I2"):
             if len(refs) != 1:
-                raise RuleError(f"{rule} requires exactly 1 referenced line.")
-            ref_ast = ctx.get_line_ast(refs[0])
+                raise RuleError(f"{rule} requires exactly 1 ref.")
+            ref_ast = ctx.resolve_ref(refs[0], current_scope_path)
             side = 1 if rule == "OR_I1" else 2
             or_intro(ref_ast, proposed_ast, side)
             return ValidationResult(True, message="Step valid (∨-Introduction).", normalised=normalised_step)
 
         if rule == "IMP_E":
             if len(refs) != 2:
-                raise RuleError("IMP_E requires exactly 2 referenced lines.")
-            a1 = ctx.get_line_ast(refs[0])
-            a2 = ctx.get_line_ast(refs[1])
+                raise RuleError("IMP_E requires exactly 2 refs.")
+            a1 = ctx.resolve_ref(refs[0], current_scope_path)
+            a2 = ctx.resolve_ref(refs[1], current_scope_path)
             expected = imp_elim(a1, a2)
             if proposed_ast != expected:
                 raise RuleError("Incorrect result for →-Elimination (MP).")
             return ValidationResult(True, message="Step valid (→-Elimination / Modus Ponens).", normalised=normalised_step)
 
         if rule == "IMP_I":
-            if len(refs) != 2:
-                raise RuleError("IMP_I requires exactly 2 refs: [assumption_line, final_line].")
+            if len(refs) == 1 and _is_range(refs[0]):
+                # Single range ref [i, j]: resolves to i's assumption → j's formula.
+                expected = ctx.resolve_ref(refs[0], current_scope_path)
+            elif len(refs) == 2 and not any(_is_range(r) for r in refs):
+                # Legacy: two integer line refs with full scope validation.
+                assumption_no, final_no = refs[0], refs[1]
+                assumption_line = ctx.get_line(assumption_no)
+                final_line = ctx.get_line(final_no)
 
-            assumption_no, final_no = refs
-            assumption_line = ctx.get_line(assumption_no)
-            final_line = ctx.get_line(final_no)
+                if assumption_line.kind != "assumption":
+                    raise RuleError("First reference of IMP_I must be an assumption line.")
 
-            if assumption_line.kind != "assumption":
-                raise RuleError("First reference of IMP_I must be an assumption line.")
+                if not assumption_line.scope_path or assumption_line.scope_path[-1] != assumption_no:
+                    raise RuleError("Assumption line has invalid scopePath.")
 
-            # assumption scope must end with its own line number
-            if not assumption_line.scope_path or assumption_line.scope_path[-1] != assumption_no:
-                raise RuleError("Assumption line has invalid scopePath.")
+                parent_scope = assumption_line.scope_path[:-1]
+                if current_scope_path != parent_scope:
+                    raise RuleError(
+                        "IMP_I must be added in the parent scope of the discharged assumption."
+                    )
 
-            parent_scope = assumption_line.scope_path[:-1]
+                if final_line.scope_path[:len(assumption_line.scope_path)] != assumption_line.scope_path:
+                    raise RuleError(
+                        "Second reference of IMP_I must be a line inside the discharged subproof."
+                    )
 
-            # IMP_I result must be added OUTSIDE that subproof
-            if current_scope_path != parent_scope:
+                if final_no <= assumption_no:
+                    raise RuleError("IMP_I requires the final line to occur after the assumption line.")
+
+                expected = imp_intro(ctx.get_line_ast(assumption_no), ctx.get_line_ast(final_no))
+            else:
                 raise RuleError(
-                    "IMP_I must be added in the parent scope of the discharged assumption."
+                    "IMP_I requires either one subproof range [i-j] or two integer refs [assumption, final]."
                 )
-
-            # final line must be inside the subproof started by that assumption
-            if final_line.scope_path[:len(assumption_line.scope_path)] != assumption_line.scope_path:
-                raise RuleError(
-                    "Second reference of IMP_I must be a line inside the discharged subproof."
-                )
-
-            if final_no <= assumption_no:
-                raise RuleError("IMP_I requires the final line to occur after the assumption line.")
-
-            assumption_ast = ctx.get_line_ast(assumption_no)
-            final_ast = ctx.get_line_ast(final_no)
-            expected = imp_intro(assumption_ast, final_ast)
 
             if proposed_ast != expected:
                 raise RuleError("Incorrect result for →-Introduction.")
 
             return ValidationResult(True, message="Step valid (→-Introduction).", normalised=normalised_step)
-        
+
         if rule == "IFF_E":
             if len(refs) != 1:
-                raise RuleError("IFF_E requires exactly 1 referenced line.")
+                raise RuleError("IFF_E requires exactly 1 ref.")
 
-            ref_ast = ctx.get_line_ast(refs[0])
+            ref_ast = ctx.resolve_ref(refs[0], current_scope_path)
             expected = iff_elim(ref_ast)
 
             if proposed_ast != expected:
@@ -413,13 +423,13 @@ def validate_step_payload(body: Dict[str, Any]) -> ValidationResult:
                 message="Step valid (↔-Elimination).",
                 normalised=normalised_step,
             )
-        
+
         if rule == "IFF_I":
             if len(refs) != 2:
-                raise RuleError("IFF_I requires exactly 2 referenced lines.")
+                raise RuleError("IFF_I requires exactly 2 refs.")
 
-            a1 = ctx.get_line_ast(refs[0])
-            a2 = ctx.get_line_ast(refs[1])
+            a1 = ctx.resolve_ref(refs[0], current_scope_path)
+            a2 = ctx.resolve_ref(refs[1], current_scope_path)
             expected = iff_intro(a1, a2)
 
             if proposed_ast != expected:
@@ -430,13 +440,13 @@ def validate_step_payload(body: Dict[str, Any]) -> ValidationResult:
                 message="Step valid (↔-Introduction).",
                 normalised=normalised_step,
             )
-        
+
         if rule == "NEG_E":
             if len(refs) != 2:
-                raise RuleError("NEG_E requires exactly 2 referenced lines.")
+                raise RuleError("NEG_E requires exactly 2 refs.")
 
-            a1 = ctx.get_line_ast(refs[0])
-            a2 = ctx.get_line_ast(refs[1])
+            a1 = ctx.resolve_ref(refs[0], current_scope_path)
+            a2 = ctx.resolve_ref(refs[1], current_scope_path)
             expected = neg_elim(a1, a2)
 
             if proposed_ast != expected:
@@ -447,13 +457,13 @@ def validate_step_payload(body: Dict[str, Any]) -> ValidationResult:
                 message="Step valid (¬-Elimination).",
                 normalised=normalised_step,
             )
-        
+
         if rule == "NEG_I":
             if len(refs) != 2:
-                raise RuleError("NEG_I requires exactly 2 referenced lines.")
+                raise RuleError("NEG_I requires exactly 2 refs.")
 
-            a1 = ctx.get_line_ast(refs[0])
-            a2 = ctx.get_line_ast(refs[1])
+            a1 = ctx.resolve_ref(refs[0], current_scope_path)
+            a2 = ctx.resolve_ref(refs[1], current_scope_path)
             expected = neg_intro(a1, a2)
 
             if proposed_ast != expected:
@@ -464,6 +474,18 @@ def validate_step_payload(body: Dict[str, Any]) -> ValidationResult:
                 message="Step valid (¬-Introduction).",
                 normalised=normalised_step,
             )
+
+        if rule == "REIT":
+            if len(refs) != 1:
+                raise RuleError("REIT requires exactly 1 ref.")
+            ref = refs[0]
+            if isinstance(ref, int) and not ctx.is_visible_from(ref, current_scope_path):
+                raise RuleError(
+                    f"Line {ref} is not accessible from the current scope."
+                )
+            resolved_ast = ctx.resolve_ref(ref, current_scope_path)
+            reiteration(proposed_ast, resolved_ast)
+            return ValidationResult(True, message="Step valid (Reiteration).", normalised=normalised_step)
 
         raise RuleError(f"Rule '{rule}' not implemented yet.")
 

@@ -143,3 +143,11 @@ def neg_intro(ast1, ast2):
         return Not(ast1.left)
 
     raise RuleError("¬-Introduction requires implications of the form A→B and A→¬B.")
+
+
+def reiteration(proposed_ast, resolved_ast):
+    if proposed_ast != resolved_ast:
+        raise RuleError(
+            "REIT: the proposed formula does not match the referenced formula."
+        )
+    return True

@@ -1,9 +1,10 @@
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Union
 
 from .validate import parse_formula
 from .parser import ParseError
 from .rules import RuleError
+from .ast import BinOp
 
 
 @dataclass
@@ -80,3 +81,67 @@ class ProofContext:
             )
 
         return line.scope_path[:-1]
+
+    def resolve_ref(
+        self,
+        ref: Union[int, List[int]],
+        current_scope_path: Tuple[int, ...],
+    ):
+        """
+        Resolve a ref to an AST node.
+
+        - int ref  → formula AST of that line (unchanged behaviour).
+        - [i, j]   → validates the subproof and returns
+                      BinOp("→", assumption_formula(i), formula(j)).
+
+        Validation for range refs:
+          • line i must have kind="assumption" with scopePath ending in i
+          • j > i and line j's scopePath is prefixed by i's scope
+          • the subproof is closed: i's scope is NOT a prefix of current_scope_path
+        """
+        if isinstance(ref, int):
+            return self.get_line_ast(ref)
+
+        if not (isinstance(ref, (list, tuple)) and len(ref) == 2):
+            raise RuleError(
+                f"Invalid ref {ref!r}: must be an integer or a two-element range [i, j]."
+            )
+
+        start, end = int(ref[0]), int(ref[1])
+
+        assumption_line = self.get_line(start)
+        if assumption_line.kind != "assumption":
+            raise RuleError(
+                f"Subproof range start (line {start}) must be an assumption, "
+                f"got kind={assumption_line.kind!r}."
+            )
+
+        if not assumption_line.scope_path or assumption_line.scope_path[-1] != start:
+            raise RuleError(
+                f"Assumption line {start} has an invalid scopePath."
+            )
+
+        if end <= start:
+            raise RuleError(
+                f"Subproof range end ({end}) must come after start ({start})."
+            )
+
+        conclusion_line = self.get_line(end)
+        subproof_scope = assumption_line.scope_path  # scope INSIDE the box
+
+        if conclusion_line.scope_path[: len(subproof_scope)] != subproof_scope:
+            raise RuleError(
+                f"Line {end} is not inside the subproof opened at line {start}."
+            )
+
+        # Closed means: the subproof's own scope is no longer active.
+        # i.e. current_scope_path must NOT start with subproof_scope.
+        if current_scope_path[: len(subproof_scope)] == subproof_scope:
+            raise RuleError(
+                f"Subproof opened at line {start} is still active; "
+                f"close it before referencing it as a range."
+            )
+
+        assumption_ast = self.get_line_ast(start)
+        conclusion_ast = self.get_line_ast(end)
+        return BinOp("→", assumption_ast, conclusion_ast)
