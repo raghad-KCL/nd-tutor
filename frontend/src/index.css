@@ -7,19 +7,30 @@
   line-height: 1.5;
   font-weight: 400;
   color-scheme: light;
-  color: #1a1a1a;
-  background-color: #f0f2f5;
+  color: #000b21;
+  background-color: #f5f8fc;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  --nd-navy:        #000b21;
+  --nd-blue:        #003f82;
+  --nd-teal:        #4ca2b5;
+  --nd-gold:        #ffd27f;
+  --nd-gold-dark:   #c49a3c;
+  --nd-surface:     #f5f8fc;
+  --nd-surface-mid: #e8f0f8;
+  --nd-border:      #c8d8e8;
+  --nd-text:        #000b21;
+  --nd-text-muted:  #3a5068;
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: #f0f2f5;
+  background: var(--nd-surface);
 }
 
 #root {
@@ -28,35 +39,336 @@ body {
 
 a {
   font-weight: 500;
-  color: #0bc4b0;
+  color: var(--nd-teal);
   text-decoration: inherit;
 }
 a:hover {
-  color: #09a899;
+  color: var(--nd-blue);
 }
 
 h1 {
   font-size: 2em;
   line-height: 1.1;
+  color: var(--nd-navy);
 }
 
 button {
   border-radius: 8px;
-  border: 1px solid #e8e9ec;
+  border: 1px solid var(--nd-border);
   padding: 0.5em 1em;
   font-size: 1em;
   font-weight: 500;
   font-family: inherit;
-  background-color: #ffffff;
-  color: #555c6a;
+  background-color: var(--nd-surface);
+  color: var(--nd-text-muted);
   cursor: pointer;
-  transition: background-color 0.15s;
+  transition: background-color 0.18s ease-in-out, color 0.18s ease-in-out,
+              border-color 0.18s ease-in-out, box-shadow 0.18s ease-in-out,
+              opacity 0.18s ease-in-out;
 }
 button:hover {
-  background-color: #f5f6f8;
+  background-color: var(--nd-surface-mid);
 }
 button:focus,
 button:focus-visible {
-  outline: 2px solid #0bc4b0;
+  outline: 2px solid var(--nd-teal);
   outline-offset: 2px;
+}
+
+/* ── Shared animation keyframes ──────────────────────────────────── */
+
+@keyframes dropdownIn {
+  from { opacity: 0; transform: scaleY(0.92) translateY(-4px); }
+  to   { opacity: 1; transform: scaleY(1)    translateY(0); }
+}
+
+@keyframes tooltipIn {
+  from { opacity: 0; transform: translateX(-100%) translateX(6px); }
+  to   { opacity: 1; transform: translateX(-100%) translateX(0); }
+}
+
+@keyframes modalBackdropIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes modalPanelIn {
+  from { opacity: 0; transform: scale(0.95) translateY(6px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0); }
+}
+
+@keyframes fadePageIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Rules page sticky shrink-on-scroll banner ───────────────────────────── */
+/*
+ * CSS transitions use the SOURCE state's transition property.
+ * - Shrinking  (normal → compact): source = base selectors  → ease-out  (crisp)
+ * - Expanding  (compact → normal): source = .compact selectors → ease-in-out (smooth)
+ */
+
+.rules-banner {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: #000b21;
+  color: #ffffff;
+  padding: 36px 32px 28px;
+  border-bottom: 3px solid #003f82;
+  /* Used when SHRINKING (source state for normal → compact) */
+  transition: padding 0.25s ease-out;
+}
+
+.rules-banner.compact {
+  padding: 12px 32px;
+  /* Used when EXPANDING (source state for compact → normal) */
+  transition: padding 0.35s ease-in-out;
+}
+
+.rules-banner-eyebrow {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  color: #c8d8e8;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+  overflow: hidden;
+  max-height: 60px;
+  opacity: 1;
+  /* Used when SHRINKING */
+  transition: opacity 0.2s ease-out,
+              max-height 0.25s ease-out,
+              margin-bottom 0.25s ease-out;
+}
+
+.rules-banner.compact .rules-banner-eyebrow {
+  opacity: 0;
+  max-height: 0;
+  margin-bottom: 0;
+  /* Used when EXPANDING */
+  transition: opacity 0.3s ease-in-out,
+              max-height 0.35s ease-in-out,
+              margin-bottom 0.35s ease-in-out;
+}
+
+.rules-banner-title {
+  margin: 0 0 6px;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: inherit;
+  /* Used when SHRINKING */
+  transition: font-size 0.25s ease-out, margin-bottom 0.25s ease-out;
+}
+
+.rules-banner.compact .rules-banner-title {
+  font-size: 18px;
+  margin-bottom: 10px;
+  /* Used when EXPANDING */
+  transition: font-size 0.35s ease-in-out, margin-bottom 0.35s ease-in-out;
+}
+
+.rules-banner-subtitle {
+  margin: 0 0 20px;
+  color: #c8d8e8;
+  font-size: 15px;
+  overflow: hidden;
+  max-height: 60px;
+  opacity: 1;
+  /* Used when SHRINKING */
+  transition: opacity 0.2s ease-out,
+              max-height 0.25s ease-out,
+              margin-bottom 0.25s ease-out;
+}
+
+.rules-banner.compact .rules-banner-subtitle {
+  opacity: 0;
+  max-height: 0;
+  margin-bottom: 0;
+  /* Used when EXPANDING */
+  transition: opacity 0.3s ease-in-out,
+              max-height 0.35s ease-in-out,
+              margin-bottom 0.35s ease-in-out;
+}
+
+/* Controls inside the dark hero banner */
+.banner-frosted-input,
+.banner-frosted-select {
+  background: #e8f0f8;
+  border: 1px solid #c8d8e8;
+  border-radius: 999px;
+  color: #000b21;
+  transition: background 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+              border-color 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+              transform 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  color-scheme: light;
+}
+
+.banner-frosted-input::placeholder {
+  color: #3a5068;
+}
+
+.banner-frosted-select {
+  color: #3a5068;
+}
+
+.banner-frosted-input:hover,
+.banner-frosted-select:hover {
+  background: #dce8f4;
+  border-color: #a8c4dc;
+  box-shadow: 0 0 0 2px rgba(76, 162, 181, 0.10);
+  transform: translateY(-1px);
+}
+
+.banner-frosted-input:focus,
+.banner-frosted-select:focus {
+  outline: none;
+  background: #ffffff;
+  border-color: #4ca2b5;
+  box-shadow: 0 0 0 3px rgba(76, 162, 181, 0.20);
+  transform: translateY(-1px);
+}
+
+.banner-frosted-select option {
+  background: #e8f0f8;
+  color: #000b21;
+}
+
+/* ── Proof card hover lift ────────────────────────────────────────── */
+.proof-card {
+  transition: transform 0.18s cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.proof-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 11, 33, 0.10) !important;
+}
+
+/* ── Rule card expanded-content entry animation ───────────────────── */
+@keyframes expandContentIn {
+  from { opacity: 0; transform: translateY(-5px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.rule-card-content-enter {
+  animation: expandContentIn 0.18s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+/* ── Toast entry (used in App.jsx) ───────────────────────────────── */
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(12px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)    scale(1); }
+}
+
+/* ── Page content fade-in ────────────────────────────────────────── */
+.page-content-enter {
+  animation: fadePageIn 0.2s ease-in-out both;
+}
+
+/* ── Sequential ↔ Tree view toggle ──────────────────────────────── */
+.view-toggle-btn {
+  transition: background-color 0.18s ease-in-out, color 0.18s ease-in-out !important;
+}
+
+/* ── Proof tab discard × fade on hover ───────────────────────────── */
+.current-proof-tab .discard-btn {
+  font-size: 16px;
+  line-height: 1;
+  color: var(--nd-text-muted, #3a5068);
+  opacity: 0;
+  transition: opacity 0.15s ease-in-out;
+}
+.current-proof-tab:hover .discard-btn {
+  opacity: 1;
+}
+
+/* ── Form inputs & textareas — focus glow ────────────────────────── */
+.nd-input {
+  transition: border-color 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow  0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+.nd-input:hover:not(:focus) {
+  border-color: #a8c4dc !important;
+}
+.nd-input:focus {
+  border-color: #4ca2b5 !important;
+  box-shadow: 0 0 0 3px rgba(76, 162, 181, 0.16) !important;
+}
+
+/* ── Symbol-insert toolbar buttons (¬ ∧ ∨ → etc.) ───────────────── */
+.symbol-btn {
+  transition: background-color 0.14s ease,
+              transform       0.12s cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow      0.14s ease !important;
+}
+.symbol-btn:hover {
+  background-color: #dce8f4 !important;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0, 11, 33, 0.08);
+}
+.symbol-btn:active {
+  transform: scale(0.91) !important;
+  box-shadow: none !important;
+}
+
+/* ── Primary action buttons (teal) ──────────────────────────────── */
+.nd-btn-primary {
+  transition: background-color 0.18s ease,
+              color            0.18s ease,
+              transform        0.15s cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow       0.18s ease,
+              opacity          0.18s ease !important;
+}
+.nd-btn-primary:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 5px 16px rgba(76, 162, 181, 0.35) !important;
+}
+.nd-btn-primary:active:not(:disabled) {
+  transform: scale(0.97) !important;
+  box-shadow: none !important;
+}
+
+/* ── Secondary / ghost buttons ───────────────────────────────────── */
+.nd-btn-secondary {
+  transition: background-color 0.18s ease,
+              border-color     0.18s ease,
+              color            0.18s ease,
+              transform        0.15s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+.nd-btn-secondary:hover:not(:disabled) {
+  background-color: #dce8f4 !important;
+  border-color: #a8c4dc !important;
+  transform: translateY(-1px);
+}
+.nd-btn-secondary:active:not(:disabled) {
+  transform: scale(0.97) !important;
+}
+
+/* ── Proof line card slide-in when added ─────────────────────────── */
+@keyframes lineSlideIn {
+  from { opacity: 0; transform: translateX(-10px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.line-card {
+  animation: lineSlideIn 0.2s cubic-bezier(0.4, 0, 0.2, 1) both;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+/* ── Error / feedback banner fade-in ─────────────────────────────── */
+@keyframes feedbackSlideIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.feedback-enter {
+  animation: feedbackSlideIn 0.22s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+/* ── Refs field reveal when rule changes ─────────────────────────── */
+@keyframes refsReveal {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.refs-field-enter {
+  animation: refsReveal 0.18s cubic-bezier(0.4, 0, 0.2, 1) both;
 }

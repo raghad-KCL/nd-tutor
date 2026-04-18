@@ -231,6 +231,416 @@ def open_subproof_payload(body: Dict[str, Any]) -> OpenSubproofResult:
     )
 
 @dataclass
+class CloseSubproofResult:
+    ok: bool
+    type: Optional[str] = None
+    message: str = ""
+    formula: str = ""
+    refs: List[int] = None
+    scope_path: List[int] = None
+
+
+def close_subproof_payload(body: Dict[str, Any]) -> "CloseSubproofResult":
+    """
+    Validate →I conditions and generate the implication line for a closed subproof.
+
+    Expects:
+      - proofState.lines: current proof lines (the subproof's goal line already appended)
+      - assumptionLineIndex: 0-based index of the assumption line
+      - finalLineIndex: 0-based index of the line that reached the subproof goal
+    """
+    proof = body.get("proofState") or {}
+    assumption_idx = body.get("assumptionLineIndex")
+    final_idx = body.get("finalLineIndex")
+
+    if assumption_idx is None or final_idx is None:
+        return CloseSubproofResult(
+            ok=False, type="RULE",
+            message="assumptionLineIndex and finalLineIndex are required.",
+        )
+
+    lines_raw = proof.get("lines") or []
+    if not lines_raw:
+        return CloseSubproofResult(ok=False, type="RULE", message="Proof has no lines.")
+
+    ctx = ProofContext.from_payload(lines_raw)
+
+    assumption_no = assumption_idx + 1  # convert to 1-based
+    final_no = final_idx + 1
+
+    try:
+        assumption_line = ctx.get_line(assumption_no)
+        final_line = ctx.get_line(final_no)
+
+        if assumption_line.kind != "assumption":
+            return CloseSubproofResult(
+                ok=False, type="RULE",
+                message=f"Line {assumption_no} is not an assumption line.",
+            )
+
+        if not assumption_line.scope_path or assumption_line.scope_path[-1] != assumption_no:
+            return CloseSubproofResult(
+                ok=False, type="RULE",
+                message=f"Assumption line {assumption_no} has an invalid scopePath.",
+            )
+
+        if final_no <= assumption_no:
+            return CloseSubproofResult(
+                ok=False, type="RULE",
+                message="The final line must come after the assumption line.",
+            )
+
+        subproof_scope = assumption_line.scope_path
+        if final_line.scope_path[: len(subproof_scope)] != subproof_scope:
+            return CloseSubproofResult(
+                ok=False, type="RULE",
+                message=f"Line {final_no} is not inside the subproof opened at line {assumption_no}.",
+            )
+
+        assumption_ast = ctx.get_line_ast(assumption_no)
+        final_ast = ctx.get_line_ast(final_no)
+        formula_ast = imp_intro(assumption_ast, final_ast)
+        formula_str = formula_to_string(formula_ast)
+        parent_scope = list(assumption_line.scope_path[:-1])
+
+        return CloseSubproofResult(
+            ok=True,
+            message="→I line generated.",
+            formula=formula_str,
+            refs=[assumption_no, final_no],
+            scope_path=parent_scope,
+        )
+
+    except RuleError as e:
+        return CloseSubproofResult(ok=False, type="RULE", message=str(e))
+
+
+@dataclass
+class DeleteLineResult:
+    ok: bool
+    type: Optional[str] = None
+    message: str = ""
+    updated_lines: List[Dict] = None
+    flagged_line_nos: List[int] = None  # 1-based, after renumbering
+
+
+def delete_line_payload(body: Dict[str, Any]) -> "DeleteLineResult":
+    """
+    Delete a proof line and compute full transitive cascade invalidation.
+
+    Expects:
+      - proofState.lines: current proof lines
+      - lineIndex: 0-based index of the line to delete
+
+    Returns the updated line list (with ``brokenRef`` set on every
+    transitively invalidated line) plus the sorted set of 1-based line
+    numbers (after renumbering) that were flagged.
+    """
+    proof = body.get("proofState") or {}
+    lines_raw = proof.get("lines") or []
+    line_index = body.get("lineIndex")
+
+    if line_index is None:
+        return DeleteLineResult(ok=False, type="INPUT", message="lineIndex is required.")
+    if not (0 <= line_index < len(lines_raw)):
+        return DeleteLineResult(ok=False, type="INPUT", message="lineIndex out of range.")
+
+    target = lines_raw[line_index]
+    if (target or {}).get("kind") == "premise":
+        return DeleteLineResult(ok=False, type="RULE", message="Cannot delete premise lines.")
+
+    removed_line_no = line_index + 1  # 1-based
+
+    def renumber_no(n: int) -> int:
+        return n - 1 if n > removed_line_no else n
+
+    def renumber_ref(ref):
+        if isinstance(ref, (list, tuple)):
+            return [renumber_no(ref[0]), renumber_no(ref[1])]
+        return renumber_no(ref)
+
+    def ref_touches_deleted(ref) -> bool:
+        if isinstance(ref, (list, tuple)):
+            return ref[0] <= removed_line_no <= ref[1]
+        return ref == removed_line_no
+
+    # ── Step 1: remove the target line and renumber all remaining lines ───────
+    updated: List[Dict] = []
+    for i, ln in enumerate(lines_raw):
+        if i == line_index:
+            continue
+        refs = ln.get("refs") or []
+        discharges = ln.get("discharges") or []
+        scope_path = ln.get("scopePath") or []
+
+        has_direct_broken = any(ref_touches_deleted(r) for r in refs) or any(
+            d == removed_line_no for d in discharges
+        )
+
+        new_ln = dict(ln)
+        new_ln["scopePath"] = [renumber_no(x) for x in scope_path]
+        new_ln["refs"] = [renumber_ref(r) for r in refs]
+        new_ln["discharges"] = [renumber_no(d) for d in discharges]
+
+        if has_direct_broken:
+            # Attribute the brokenRef to the original deleted line number
+            new_ln["brokenRef"] = removed_line_no
+            new_ln["brokenKind"] = "deleted"
+
+        updated.append(new_ln)
+
+    # ── Step 2: cascade – propagate brokenRef to transitive dependents ────────
+    broken_new_nos: set = {i + 1 for i, ln in enumerate(updated) if ln.get("brokenRef")}
+
+    def ref_is_broken(ref) -> bool:
+        if isinstance(ref, (list, tuple)):
+            return any(n in broken_new_nos for n in range(ref[0], ref[1] + 1))
+        return ref in broken_new_nos
+
+    changed = True
+    while changed:
+        changed = False
+        for i, ln in enumerate(updated):
+            if i + 1 in broken_new_nos:
+                continue
+            refs = ln.get("refs") or []
+            discharges = ln.get("discharges") or []
+
+            broken_dep = None
+            for r in refs:
+                if ref_is_broken(r):
+                    broken_dep = r[0] if isinstance(r, (list, tuple)) else r
+                    break
+            if broken_dep is None:
+                for d in discharges:
+                    if d in broken_new_nos:
+                        broken_dep = d
+                        break
+
+            if broken_dep is not None:
+                broken_new_nos.add(i + 1)
+                new_ln = dict(ln)
+                new_ln["brokenRef"] = broken_dep
+                new_ln["brokenKind"] = "cascade"
+                updated[i] = new_ln
+                changed = True
+
+    # ── Step 3: auto-remove broken →I lines ──────────────────────────────────
+    # A →I line is a live consequence of its subproof. If it becomes broken,
+    # remove it automatically and cascade to anything that depended on it.
+    # Loop until no more broken →I lines remain (handles nested subproofs).
+    while True:
+        broken_impi = [
+            i for i, ln in enumerate(updated)
+            if (i + 1) in broken_new_nos
+            and ln.get("rule") == "IMP_I"
+            and ln.get("discharges")
+        ]
+        if not broken_impi:
+            break
+
+        to_remove = {i + 1 for i in broken_impi}  # 1-based
+
+        def _rn(n: int, _tr=to_remove) -> int:
+            return n - sum(1 for r in _tr if r < n)
+
+        def _rr(ref, _tr=to_remove):
+            if isinstance(ref, (list, tuple)):
+                return [_rn(ref[0], _tr), _rn(ref[1], _tr)]
+            return _rn(ref, _tr)
+
+        def _touches(ref, _tr=to_remove) -> bool:
+            if isinstance(ref, (list, tuple)):
+                return any(n in _tr for n in range(ref[0], ref[1] + 1))
+            return ref in _tr
+
+        new_updated: List[Dict] = []
+        for i, ln in enumerate(updated):
+            if (i + 1) in to_remove:
+                continue
+            new_ln = dict(ln)
+            old_refs = ln.get("refs") or []
+            old_discharges = ln.get("discharges") or []
+            new_ln["scopePath"] = [_rn(x) for x in (ln.get("scopePath") or [])]
+            new_ln["refs"] = [_rr(r) for r in old_refs]
+            new_ln["discharges"] = [_rn(d) for d in old_discharges]
+            if not new_ln.get("brokenRef"):
+                if any(_touches(r) for r in old_refs) or any(d in to_remove for d in old_discharges):
+                    broken_src = next(
+                        (r[0] if isinstance(r, (list, tuple)) else r for r in old_refs if _touches(r)),
+                        next((d for d in old_discharges if d in to_remove), None),
+                    )
+                    new_ln["brokenRef"] = broken_src
+                    new_ln["brokenKind"] = "deleted"
+            new_updated.append(new_ln)
+
+        updated = new_updated
+        broken_new_nos = {i + 1 for i, ln in enumerate(updated) if ln.get("brokenRef")}
+
+        # Re-cascade after removing the →I lines
+        def _ref_is_broken_inner(ref) -> bool:
+            if isinstance(ref, (list, tuple)):
+                return any(n in broken_new_nos for n in range(ref[0], ref[1] + 1))
+            return ref in broken_new_nos
+
+        changed = True
+        while changed:
+            changed = False
+            for i, ln in enumerate(updated):
+                if i + 1 in broken_new_nos:
+                    continue
+                broken_dep = None
+                for r in (ln.get("refs") or []):
+                    if _ref_is_broken_inner(r):
+                        broken_dep = r[0] if isinstance(r, (list, tuple)) else r
+                        break
+                if broken_dep is None:
+                    for d in (ln.get("discharges") or []):
+                        if d in broken_new_nos:
+                            broken_dep = d
+                            break
+                if broken_dep is not None:
+                    broken_new_nos.add(i + 1)
+                    new_ln = dict(ln)
+                    new_ln["brokenRef"] = broken_dep
+                    new_ln["brokenKind"] = "cascade"
+                    updated[i] = new_ln
+                    changed = True
+
+    return DeleteLineResult(
+        ok=True,
+        updated_lines=updated,
+        flagged_line_nos=sorted(broken_new_nos),
+    )
+
+
+@dataclass
+class DeleteSubproofResult:
+    ok: bool
+    type: Optional[str] = None
+    message: str = ""
+    updated_lines: List[Dict] = None
+    flagged_line_nos: List[int] = None
+
+
+def delete_subproof_payload(body: Dict[str, Any]) -> "DeleteSubproofResult":
+    """
+    Delete an entire subproof atomically:
+      - The assumption line
+      - All lines whose scopePath begins with the assumption's scopePath
+      - The →I line that discharges this assumption (if it exists)
+
+    Cascade-flags any external lines that referenced the removed lines.
+
+    Expects:
+      - proofState.lines: current proof lines
+      - assumptionLineIndex: 0-based index of the assumption line
+    """
+    proof = body.get("proofState") or {}
+    lines_raw = proof.get("lines") or []
+    assumption_idx = body.get("assumptionLineIndex")
+
+    if assumption_idx is None:
+        return DeleteSubproofResult(ok=False, type="INPUT", message="assumptionLineIndex is required.")
+    if not (0 <= assumption_idx < len(lines_raw)):
+        return DeleteSubproofResult(ok=False, type="INPUT", message="assumptionLineIndex out of range.")
+
+    assumption_line = lines_raw[assumption_idx]
+    if (assumption_line or {}).get("kind") != "assumption":
+        return DeleteSubproofResult(ok=False, type="RULE", message="Target line is not an assumption.")
+
+    assumption_no = assumption_idx + 1  # 1-based
+    scope_path = list(assumption_line.get("scopePath") or [])
+
+    def is_in_subproof(ln) -> bool:
+        lsp = ln.get("scopePath") or []
+        return (
+            len(lsp) >= len(scope_path)
+            and lsp[: len(scope_path)] == scope_path
+        )
+
+    def is_impi_closing(ln) -> bool:
+        return ln.get("rule") == "IMP_I" and assumption_no in (ln.get("discharges") or [])
+
+    remove_indices = {
+        i for i, ln in enumerate(lines_raw)
+        if is_in_subproof(ln) or is_impi_closing(ln)
+    }
+    removed_nos = sorted(i + 1 for i in remove_indices)
+    removed_nos_set = set(removed_nos)
+
+    def rn(n: int) -> int:
+        return n - sum(1 for r in removed_nos if r < n)
+
+    def rr(ref):
+        if isinstance(ref, (list, tuple)):
+            return [rn(ref[0]), rn(ref[1])]
+        return rn(ref)
+
+    def touches(ref) -> bool:
+        if isinstance(ref, (list, tuple)):
+            return any(n in removed_nos_set for n in range(ref[0], ref[1] + 1))
+        return ref in removed_nos_set
+
+    updated: List[Dict] = []
+    for i, ln in enumerate(lines_raw):
+        if i in remove_indices:
+            continue
+        new_ln = dict(ln)
+        old_refs = ln.get("refs") or []
+        old_discharges = ln.get("discharges") or []
+        new_ln["scopePath"] = [rn(x) for x in (ln.get("scopePath") or [])]
+        new_ln["refs"] = [rr(r) for r in old_refs]
+        new_ln["discharges"] = [rn(d) for d in old_discharges]
+        if any(touches(r) for r in old_refs) or any(d in removed_nos_set for d in old_discharges):
+            broken_src = next(
+                (r[0] if isinstance(r, (list, tuple)) else r for r in old_refs if touches(r)),
+                next((d for d in old_discharges if d in removed_nos_set), None),
+            )
+            new_ln["brokenRef"] = broken_src
+            new_ln["brokenKind"] = "deleted"
+        updated.append(new_ln)
+
+    # Cascade
+    broken_new_nos: set = {i + 1 for i, ln in enumerate(updated) if ln.get("brokenRef")}
+
+    def ref_broken(ref) -> bool:
+        if isinstance(ref, (list, tuple)):
+            return any(n in broken_new_nos for n in range(ref[0], ref[1] + 1))
+        return ref in broken_new_nos
+
+    changed = True
+    while changed:
+        changed = False
+        for i, ln in enumerate(updated):
+            if i + 1 in broken_new_nos:
+                continue
+            broken_dep = None
+            for r in (ln.get("refs") or []):
+                if ref_broken(r):
+                    broken_dep = r[0] if isinstance(r, (list, tuple)) else r
+                    break
+            if broken_dep is None:
+                for d in (ln.get("discharges") or []):
+                    if d in broken_new_nos:
+                        broken_dep = d
+                        break
+            if broken_dep is not None:
+                broken_new_nos.add(i + 1)
+                new_ln = dict(ln)
+                new_ln["brokenRef"] = broken_dep
+                new_ln["brokenKind"] = "cascade"
+                updated[i] = new_ln
+                changed = True
+
+    return DeleteSubproofResult(
+        ok=True,
+        updated_lines=updated,
+        flagged_line_nos=sorted(broken_new_nos),
+    )
+
+
+@dataclass
 class ValidationResult:
     ok: bool
     type: Optional[str] = None  # "SYNTAX" or "RULE"

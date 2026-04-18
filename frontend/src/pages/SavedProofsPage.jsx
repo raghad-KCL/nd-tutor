@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import { useAuth } from "../AuthContext";
+import ExportButton from "../components/ExportButton";
+import { useStickyBanner } from "../hooks/useStickyBanner";
 
-export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBackButton = false }) {
+export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBackButton = false, onOpenAuthModal, onShowToast }) {
+  const { user } = useAuth();
+  const { compact, wrapperRef } = useStickyBanner();
   const [savedProofs, setSavedProofs] = useState([]);
   const [loadingProofs, setLoadingProofs] = useState(false);
   const [proofsFeedback, setProofsFeedback] = useState(null);
@@ -9,6 +14,9 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
   const [searchText, setSearchText] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [sortBy, setSortBy] = useState("");
+
+  // Delete confirm state
+  const [deleteConfirmProof, setDeleteConfirmProof] = useState(null);
 
   // Rename state
   const [renamingId, setRenamingId] = useState(null);
@@ -92,7 +100,7 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
       }
 
       setSavedProofs((prev) => prev.filter((p) => p.id !== proofId));
-      setProofsFeedback({ ok: true, message: data?.message || "Proof deleted successfully." });
+      onShowToast?.("success", "Proof deleted", data?.message || "Proof deleted successfully.");
     } catch (e) {
       setProofsFeedback({ ok: false, message: `Delete failed: ${String(e)}` });
     }
@@ -118,6 +126,7 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
       setSavedProofs((prev) =>
         prev.map((p) => (p.id === proofId ? { ...p, title: trimmed } : p))
       );
+      onShowToast?.("success", "Proof renamed", `Renamed to "${trimmed}".`);
     } catch (e) {
       setProofsFeedback({ ok: false, message: `Rename failed: ${String(e)}` });
     }
@@ -180,51 +189,133 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
       return 0;
     });
 
-  const selectStyle = {
-    borderRadius: 8,
-    padding: "6px 10px",
-    background: "#ffffff",
-    color: "#555c6a",
-    border: "1px solid #e8e9ec",
-    cursor: "pointer",
-    fontWeight: 500,
-    fontSize: 13,
-    outline: "none",
-  };
+  if (user === undefined) {
+    return (
+      <div ref={wrapperRef} style={{ minHeight: "100vh", background: "#f5f8fc" }}>
+        <div className={`rules-banner${compact ? " compact" : ""}`}>
+          <div style={{ maxWidth: 980, margin: "0 auto" }}>
+            <div className="rules-banner-eyebrow">Natural Deduction</div>
+            <h1 className="rules-banner-title">Saved Proofs</h1>
+          </div>
+        </div>
+        <div style={{ padding: "clamp(14px, 2.5vw, 28px)", color: "#3a5068", fontSize: 14 }}>Loading...</div>
+      </div>
+    );
+  }
+
+  if (user === null) {
+    return (
+      <div ref={wrapperRef} style={{ minHeight: "100vh", background: "#f5f8fc", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", padding: "0 0 60px" }}>
+        <div className={`rules-banner${compact ? " compact" : ""}`}>
+          <div style={{ maxWidth: 980, margin: "0 auto" }}>
+            <div className="rules-banner-eyebrow">Natural Deduction</div>
+            <h1 className="rules-banner-title">Saved Proofs</h1>
+            <p className="rules-banner-subtitle">Your saved natural deduction proofs.</p>
+          </div>
+        </div>
+        <div style={{ maxWidth: 980, margin: "0 auto", padding: "28px 32px 0", boxSizing: "border-box" }}>
+          <div style={{ background: "#ffffff", border: "1px solid #c8d8e8", borderRadius: 14, padding: "32px 28px", boxShadow: "0 2px 8px rgba(0,0,0,0.06)", textAlign: "center" }}>
+            <p style={{ fontSize: 16, color: "#3a5068", marginTop: 0, marginBottom: 20 }}>
+              To access this page you need to log in or sign up.
+            </p>
+            <button
+              onClick={onOpenAuthModal}
+              style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: "#4ca2b5", color: "#ffffff", fontWeight: 700, fontSize: 14, cursor: "pointer" }}
+            >
+              Log in / Sign up
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
+    <>
     <div
+      ref={wrapperRef}
       style={{
-        background: "#f0f2f5",
-        color: "#1a1a1a",
+        minHeight: "100vh",
+        background: "#f5f8fc",
+        color: "#000b21",
         fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-        padding: "clamp(14px, 2.5vw, 28px)",
-        boxSizing: "border-box",
-        display: "flex",
-        justifyContent: "center",
+        padding: "0 0 60px",
       }}
     >
-      <div
-        style={{
-          maxWidth: 980,
-          width: "100%",
-          margin: "0 auto",
-          boxSizing: "border-box",
-        }}
-      >
-        <h1 style={{ fontSize: 42, margin: 0 }}>ND Tutor</h1>
-        <p style={{ opacity: 0.85, marginTop: 8 }}>Saved proofs</p>
+      {/* Dark header banner */}
+      <div className={`rules-banner${compact ? " compact" : ""}`}>
+        <div style={{ maxWidth: 980, margin: "0 auto" }}>
+          <div className="rules-banner-eyebrow">Natural Deduction</div>
+          <h1 className="rules-banner-title">Saved Proofs</h1>
+          <p className="rules-banner-subtitle">Your saved natural deduction proofs.</p>
 
-        <div style={{ display: "flex", gap: 10, marginTop: 16, marginBottom: 6, flexWrap: "wrap" }}>
+          {/* Search + filter row */}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <input
+              type="text"
+              placeholder="Search by title..."
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              className="banner-frosted-input"
+              style={{
+                flex: "1 1 200px",
+                maxWidth: "360px",
+                padding: "9px 14px",
+                borderRadius: "999px",
+                fontSize: "14px",
+                boxSizing: "border-box",
+              }}
+            />
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="banner-frosted-select"
+              style={{
+                borderRadius: 999,
+                padding: "9px 10px",
+                cursor: "pointer",
+                fontWeight: 500,
+                fontSize: 14,
+              }}
+            >
+              <option>All</option>
+              <option>Complete</option>
+              <option>In Progress</option>
+            </select>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="banner-frosted-select"
+              style={{
+                borderRadius: 999,
+                padding: "9px 10px",
+                cursor: "pointer",
+                fontWeight: 500,
+                fontSize: 14,
+              }}
+            >
+              <option value="">Sort by...</option>
+              <option>Newest</option>
+              <option>Oldest</option>
+              <option value="A\u2013Z">A&ndash;Z</option>
+              <option value="Z\u2013A">Z&ndash;A</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 980, margin: "0 auto", padding: "28px 32px 0", boxSizing: "border-box" }}>
+        <div style={{ display: "flex", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
           {!hideBackButton && (
             <button
               onClick={onBackToWorkspace}
+              className="nd-btn-secondary"
               style={{
                 borderRadius: 10,
                 padding: "8px 14px",
-                background: "#ffffff",
-                color: "#555c6a",
-                border: "1px solid #e8e9ec",
+                background: "#f5f8fc",
+                color: "#3a5068",
+                border: "1px solid #c8d8e8",
                 cursor: "pointer",
                 fontWeight: 500,
               }}
@@ -236,12 +327,13 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
           <button
             onClick={loadSavedProofs}
             disabled={loadingProofs}
+            className="nd-btn-secondary"
             style={{
               borderRadius: 10,
               padding: "8px 14px",
               background: "#ffffff",
-              color: "#555c6a",
-              border: "1px solid #e8e9ec",
+              color: "#3a5068",
+              border: "1px solid #c8d8e8",
               cursor: "pointer",
               fontWeight: 500,
             }}
@@ -254,79 +346,30 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
           style={{
             marginTop: 18,
             background: "#ffffff",
-            border: "none",
-            borderRadius: 18,
+            border: "1.5px solid #c8d8e8",
+            borderRadius: 14,
             padding: 20,
             boxSizing: "border-box",
-            boxShadow: "0 2px 12px rgba(0,0,0,0.07)",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
           }}
         >
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-            <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: "#1a1a1a" }}>Saved Proofs</h2>
+            <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: "#000b21" }}>Saved Proofs</h2>
             <span style={{ opacity: 0.75, fontSize: 13 }}>
               {filtered.length}{filtered.length !== savedProofs.length ? ` of ${savedProofs.length}` : ""} proof{savedProofs.length === 1 ? "" : "s"}
             </span>
           </div>
 
-          {/* Filter bar */}
-          <div
-            style={{
-              marginTop: 14,
-              display: "flex",
-              gap: 8,
-              flexWrap: "wrap",
-              alignItems: "center",
-            }}
-          >
-            <input
-              type="text"
-              placeholder="Search by title..."
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              style={{
-                flex: "1 1 200px",
-                borderRadius: 8,
-                padding: "6px 10px",
-                background: "#f8f9fb",
-                color: "#1a1a1a",
-                border: "1px solid #e8e9ec",
-                fontSize: 13,
-                outline: "none",
-              }}
-            />
-
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              style={selectStyle}
-            >
-              <option>All</option>
-              <option>Complete</option>
-              <option>In Progress</option>
-            </select>
-
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              style={selectStyle}
-            >
-              <option value="">Sort by...</option>
-              <option>Newest</option>
-              <option>Oldest</option>
-              <option value="A\u2013Z">A&ndash;Z</option>
-              <option value="Z\u2013A">Z&ndash;A</option>
-            </select>
-          </div>
-
           {proofsFeedback && (
             <div
+              className="feedback-enter"
               style={{
                 marginTop: 12,
                 padding: 12,
                 borderRadius: 12,
-                background: proofsFeedback.ok ? "#e8faf8" : "#fee2e2",
-                border: proofsFeedback.ok ? "1px solid #0bc4b0" : "1px solid #fca5a5",
-                color: proofsFeedback.ok ? "#0bc4b0" : "#991b1b",
+                background: proofsFeedback.ok ? "#e8f0f8" : "#fee2e2",
+                border: proofsFeedback.ok ? "1px solid #4ca2b5" : "1px solid #fca5a5",
+                color: proofsFeedback.ok ? "#4ca2b5" : "#991b1b",
               }}
             >
               {proofsFeedback.message}
@@ -342,13 +385,15 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
               filtered.map((proof) => (
                 <div
                   key={proof.id}
+                  className="proof-card"
                   style={{
-                    background: "#f8f9fb",
-                    border: "1px solid #edeef1",
-                    borderRadius: 14,
-                    padding: 14,
+                    background: "#ffffff",
+                    border: "1.5px solid #c8d8e8",
+                    borderRadius: 12,
+                    padding: 16,
                     display: "grid",
                     gap: 8,
+                    boxShadow: "0 1px 4px rgba(0,0,0,0.05)",
                   }}
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
@@ -360,6 +405,7 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
                             ref={renameInputRef}
                             value={renameValue}
                             onChange={(e) => setRenameValue(e.target.value)}
+                            className="nd-input"
                             onKeyDown={(e) => {
                               if (e.key === "Enter") confirmRename(proof.id);
                               if (e.key === "Escape") cancelRename();
@@ -373,10 +419,10 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
                               flex: 1,
                               padding: "2px 6px",
                               borderRadius: 6,
-                              border: "1px solid #0bc4b0",
+                              border: "1px solid #4ca2b5",
                               outline: "none",
-                              background: "#ffffff",
-                              color: "#1a1a1a",
+                              background: "#f5f8fc",
+                              color: "#000b21",
                               boxSizing: "border-box",
                             }}
                           />
@@ -388,7 +434,7 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
                             }}
                             title="Confirm rename"
                             style={{
-                              background: "#0bc4b0",
+                              background: "#4ca2b5",
                               border: "none",
                               borderRadius: 6,
                               color: "#fff",
@@ -408,9 +454,9 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
                             title="Cancel rename"
                             style={{
                               background: "none",
-                              border: "1px solid #e8e9ec",
+                              border: "1px solid #c8d8e8",
                               borderRadius: 6,
-                              color: "#555c6a",
+                              color: "#3a5068",
                               cursor: "pointer",
                               padding: "2px 8px",
                               fontSize: 13,
@@ -432,7 +478,7 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
                               border: "none",
                               cursor: "pointer",
                               padding: "0 2px",
-                              color: "#adb5bd",
+                              color: "#3a5068",
                               fontSize: 14,
                               lineHeight: 1,
                               flexShrink: 0,
@@ -454,14 +500,15 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
                     <div
                       style={{
                         alignSelf: "start",
-                        padding: "4px 10px",
+                        padding: "4px 12px",
                         borderRadius: 999,
                         fontSize: 12,
-                        fontWeight: 800,
-                        background: proof.is_complete ? "#e8faf8" : "#f5f6f8",
-                        color: proof.is_complete ? "#0bc4b0" : "#8a8f99",
-                        border: proof.is_complete ? "1px solid #0bc4b0" : "1px solid #e8e9ec",
+                        fontWeight: 700,
+                        background: proof.is_complete ? "#e0f4f7" : "#f5f8fc",
+                        color: proof.is_complete ? "#2a8a9f" : "#3a5068",
+                        border: proof.is_complete ? "1.5px solid #4ca2b5" : "1.5px solid #c8d8e8",
                         flexShrink: 0,
+                        letterSpacing: "0.02em",
                       }}
                     >
                       {proof.is_complete ? "Complete" : "In progress"}
@@ -477,13 +524,14 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
                     Updated: {proof.updated_at ? new Date(proof.updated_at).toLocaleString() : "-"}
                   </div>
 
-                  <div style={{ display: "flex", gap: 10, marginTop: 6, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", gap: 10, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
                     <button
                       onClick={() => openSavedProof(proof.id)}
+                      className="nd-btn-primary"
                       style={{
                         borderRadius: 10,
                         padding: "10px 14px",
-                        background: "#0bc4b0",
+                        background: "#4ca2b5",
                         color: "#ffffff",
                         border: "none",
                         cursor: "pointer",
@@ -494,7 +542,8 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
                     </button>
 
                     <button
-                      onClick={() => deleteSavedProof(proof.id)}
+                      onClick={() => setDeleteConfirmProof(proof)}
+                      className="nd-btn-secondary"
                       style={{
                         borderRadius: 10,
                         padding: "10px 14px",
@@ -507,6 +556,18 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
                     >
                       Delete
                     </button>
+
+                    <ExportButton
+                      proofData={{
+                        title: proof.title || null,
+                        premises: proof.premises || [],
+                        conclusion: proof.conclusion || "",
+                        lines: proof.lines || [],
+                        is_complete: proof.is_complete || false,
+                      }}
+                      goalTreeElementId={null}
+                      onExport={() => onShowToast?.("success", "Proof exported", "Proof opened for printing/download.")}
+                    />
                   </div>
                 </div>
               ))
@@ -515,5 +576,82 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
         </div>
       </div>
     </div>
+
+    {/* Delete confirmation modal */}
+    {deleteConfirmProof && (
+      <div
+        onClick={() => setDeleteConfirmProof(null)}
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 10000,
+          background: "rgba(0,0,0,0.35)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          animation: "modalBackdropIn 0.2s ease-in-out both",
+        }}
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            background: "#f5f8fc",
+            borderRadius: 16,
+            padding: "28px 32px",
+            boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
+            maxWidth: 400,
+            width: "calc(100% - 40px)",
+            boxSizing: "border-box",
+            animation: "modalPanelIn 0.2s ease-in-out both",
+          }}
+        >
+          <h2 style={{ margin: "0 0 8px 0", fontSize: 18, fontWeight: 700, color: "#000b21" }}>
+            Delete this proof?
+          </h2>
+          <p style={{ margin: "0 0 4px 0", fontSize: 14, color: "#3a5068", lineHeight: 1.6 }}>
+            <strong>{deleteConfirmProof.title || `Proof of ${deleteConfirmProof.conclusion}`}</strong> will be permanently deleted.
+          </p>
+          <p style={{ margin: "0 0 24px 0", fontSize: 13, color: "#6b8aaa" }}>
+            This cannot be undone.
+          </p>
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+            <button
+              onClick={() => setDeleteConfirmProof(null)}
+              style={{
+                padding: "9px 20px",
+                borderRadius: 10,
+                border: "1px solid #c8d8e8",
+                background: "transparent",
+                color: "#3a5068",
+                cursor: "pointer",
+                fontWeight: 600,
+                fontSize: 14,
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => {
+                deleteSavedProof(deleteConfirmProof.id);
+                setDeleteConfirmProof(null);
+              }}
+              style={{
+                padding: "9px 20px",
+                borderRadius: 10,
+                border: "none",
+                background: "#ef4444",
+                color: "#ffffff",
+                cursor: "pointer",
+                fontWeight: 700,
+                fontSize: 14,
+              }}
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
