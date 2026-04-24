@@ -36,11 +36,25 @@ const C = {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
+/**
+ * Checks whether an assumption line has been discharged by an →I line.
+ *
+ * @param {number} lineNo - 1-based line number of the assumption.
+ * @param {Array}  lines  - Current proof lines.
+ * @returns {boolean}
+ */
 function isDischargedLineNo(lineNo, lines) {
   return lines.some((l) => (l.discharges || []).includes(lineNo));
 }
 
 // Sort items from getDirectItemsForScope by their position in lines[]
+/**
+ * Sorts scope items by their order of appearance in the proof lines array.
+ *
+ * @param {Array} items - Items returned by `getDirectItemsForScope`.
+ * @param {Array} lines - Current proof lines.
+ * @returns {Array} A new sorted array.
+ */
 function sortedItems(items, lines) {
   return [...items].sort(
     (a, b) => lines.indexOf(a.line) - lines.indexOf(b.line)
@@ -49,6 +63,16 @@ function sortedItems(items, lines) {
 
 // ── Step card — one proof line ─────────────────────────────────────────────
 
+/**
+ * Renders a single proof line as a coloured card with a status dot,
+ * formula text, sublabel (rule / role), and line number.
+ *
+ * @param {Object}  props
+ * @param {Object}  props.line       - The proof line object.
+ * @param {number}  props.lineNo     - 1-based line number.
+ * @param {Array}   props.lines      - Full proof lines (for discharge lookup).
+ * @param {boolean} props.isGoalLine - Whether this line matches the conclusion.
+ */
 function StepCard({ line, lineNo, lines, isGoalLine }) {
   const { formula, kind, rule = "" } = line;
   const ruleLabel = RULE_LABELS[rule] || rule;
@@ -121,6 +145,7 @@ function StepCard({ line, lineNo, lines, isGoalLine }) {
 
 // ── Connector (vertical line between items) ────────────────────────────────
 
+/** Thin vertical connector line drawn between sibling items. */
 function Connector() {
   return <div style={{ width: 2, height: 8, background: "#c8d8e8", margin: "0 auto" }} />;
 }
@@ -139,6 +164,16 @@ const BOX_COLORS = [
 // Renders all lines at `scopePath` in proof order,
 // with nested subproofs as dashed bordered boxes.
 
+/**
+ * Recursively renders all proof lines at a given scope, grouping
+ * nested subproofs into dashed-bordered boxes.
+ *
+ * @param {Object}   props
+ * @param {number[]} props.scopePath  - Scope path to render.
+ * @param {Array}    props.lines      - Full proof lines.
+ * @param {string}   props.conclusion - Target conclusion formula.
+ * @param {number}   props.depth      - Nesting depth (for colour cycling).
+ */
 function ScopeBlock({ scopePath, lines, conclusion, depth }) {
   const items = sortedItems(getDirectItemsForScope(scopePath, lines), lines);
 
@@ -260,6 +295,17 @@ const LEGEND = [
 
 // ── Public component ───────────────────────────────────────────────────────
 
+/**
+ * Forward dynamic goal tree that visualises proof progress as a
+ * vertical scope-based decomposition. Updates live as lines change.
+ *
+ * @param {Object}   props
+ * @param {string}   props.conclusion - Target conclusion formula.
+ * @param {Array}    props.lines      - Current proof lines.
+ * @param {boolean}  props.collapsed  - Whether the panel is collapsed.
+ * @param {Function} props.onToggle   - Callback to toggle collapsed state.
+ * @param {boolean}  props.isMobile   - Whether the viewport is mobile-sized.
+ */
 export default function GoalDecompositionTree({
   conclusion,
   lines,

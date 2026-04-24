@@ -1,6 +1,14 @@
 import { useState } from "react";
 import { getProblemType, PROBLEM_TYPE_TOOLTIPS } from "../utils";
 
+/**
+ * Displays the inferred problem type (e.g. "Theorem", "Derivation") with
+ * a hover tooltip explaining the category.
+ *
+ * @param {Object}  props
+ * @param {Array}   props.premises - List of premise formula strings.
+ * @param {boolean} [props.dark=false] - Use light text colour for dark backgrounds.
+ */
 export default function ProblemTypeLabel({ premises, dark = false }) {
   const [hovered, setHovered] = useState(false);
   const type = getProblemType(premises);

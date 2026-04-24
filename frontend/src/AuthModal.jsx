@@ -1,6 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "./AuthContext";
 
+/**
+ * Modal dialog for logging in or signing up.
+ *
+ * Provides a togglable login / sign-up form with validation feedback.
+ * Closes on successful authentication, backdrop click, or Escape.
+ *
+ * @param {Object}   props
+ * @param {Function} props.onClose - Callback to close the modal.
+ */
 export default function AuthModal({ onClose }) {
   const { login, register } = useAuth();
   const [mode, setMode] = useState("login"); // "login" | "signup"
@@ -14,6 +23,12 @@ export default function AuthModal({ onClose }) {
     usernameRef.current?.focus();
   }, [mode]);
 
+  /**
+   * Submits the login or registration form.
+   *
+   * Validates inputs, delegates to the auth context, and closes the
+   * modal on success.
+   */
   async function handleSubmit() {
     setError(null);
     if (!username.trim() || !password) {
@@ -35,6 +50,11 @@ export default function AuthModal({ onClose }) {
     }
   }
 
+  /**
+   * Handles Enter (submit) and Escape (close) key presses.
+   *
+   * @param {KeyboardEvent} e
+   */
   function handleKeyDown(e) {
     if (e.key === "Enter") handleSubmit();
     if (e.key === "Escape") onClose();

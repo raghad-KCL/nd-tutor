@@ -19,9 +19,23 @@ const RULE_MAP = {
   IFF_I:"↔I",  IFF_E:"↔E",
   REIT:"Reit", ASSUME:"Assume", PREMISE:"Premise",
 };
+/**
+ * Formats a rule code to a display-friendly Unicode label.
+ *
+ * @param {string} r - Rule code.
+ * @returns {string} Display label.
+ */
 function fmtRule(r) { return RULE_MAP[r] || r || ""; }
 
 // ── Step 1 — buildGoalTree ────────────────────────────────────────────────────
+/**
+ * Builds a hierarchical goal tree from proof state for SVG rendering.
+ *
+ * @param {Array}  lines      - Current proof lines.
+ * @param {string} conclusion - Target conclusion formula.
+ * @param {Array}  openBoxes  - Currently open subproof descriptors.
+ * @returns {Object} The root tree node.
+ */
 function buildGoalTree(lines, conclusion, openBoxes) {
   const allLines = lines || [];
   const ct = (conclusion || "").trim();
@@ -154,6 +168,14 @@ function buildGoalTree(lines, conclusion, openBoxes) {
 }
 
 // ── Step 2 — assignPositions ──────────────────────────────────────────────────
+/**
+ * Assigns layout coordinates via recursive walk (leaves get sequential
+ * x slots, parents are centred).
+ *
+ * @param {Object} node  - Tree node to position.
+ * @param {number} depth - Current depth level.
+ * @param {{val: number}} ctr - Mutable leaf counter.
+ */
 function assignPositions(node, depth, ctr) {
   if (node.children.length === 0) {
     node.x = ctr.val++;
@@ -166,6 +188,11 @@ function assignPositions(node, depth, ctr) {
 }
 
 // ── Step 3 — scale to pixels ──────────────────────────────────────────────────
+/**
+ * Converts abstract x/y positions into pixel coordinates for vertical layout.
+ *
+ * @param {Object} node - Tree node (mutated in place with `px`/`py`).
+ */
 function applyPixels(node) {
   node.px = PAD_X + node.x * H_SLOT + NODE_W / 2;
   node.py = PAD_Y + node.y * LEVEL_H;
@@ -173,6 +200,12 @@ function applyPixels(node) {
 }
 
 // ── Step 4 — flatten tree ─────────────────────────────────────────────────────
+/**
+ * Flattens a tree into a single array of all nodes (pre-order).
+ *
+ * @param {Object} root - Root tree node.
+ * @returns {Array<Object>}
+ */
 function collectAll(root) {
   const out = [];
   (function w(n) { out.push(n); n.children.forEach(w); })(root);
@@ -180,6 +213,13 @@ function collectAll(root) {
 }
 
 // ── Node colour palette ───────────────────────────────────────────────────────
+/**
+ * Returns SVG colour values for a node based on its type and status.
+ *
+ * @param {string} type   - Node type.
+ * @param {string} status - Node status.
+ * @returns {{fill: string, stroke: string, sw: number, ink: string, dim: string}}
+ */
 function palette(type, status) {
   if (type === "goal")
     return status === "proved"
@@ -198,6 +238,13 @@ function palette(type, status) {
   return { fill:"#f8fafc", stroke:"#c8d8e8", sw:1, ink:"#94a3b8", dim:"#b8c4ce" };
 }
 
+/**
+ * Returns the uppercase category tag displayed in a tree node.
+ *
+ * @param {string} type - Node type.
+ * @param {string} rule - Inference rule (for subgoal labelling).
+ * @returns {string}
+ */
 function typeTag(type, rule) {
   if (type === "goal")     return "GOAL";
   if (type === "strategy") return "STRATEGY";
@@ -206,17 +253,40 @@ function typeTag(type, rule) {
   return "";
 }
 
+/**
+ * Truncates text, appending an ellipsis if needed.
+ *
+ * @param {string} text - The string to clip.
+ * @param {number} [max=21] - Maximum character count.
+ * @returns {string}
+ */
 function clip(text, max = 21) {
   if (!text) return "";
   return text.length > max ? text.slice(0, max - 1) + "\u2026" : text;
 }
 
 // ── SVG: connector paths ──────────────────────────────────────────────────────
+/**
+ * Generates an SVG cubic Bézier path string for a vertical connector.
+ *
+ * @param {number} x1 - Start x.
+ * @param {number} y1 - Start y.
+ * @param {number} x2 - End x.
+ * @param {number} y2 - End y.
+ * @returns {string} SVG path `d` attribute.
+ */
 function bezier(x1, y1, x2, y2) {
   const cy = (y1 + y2) / 2;
   return `M${x1},${y1} C${x1},${cy} ${x2},${cy} ${x2},${y2}`;
 }
 
+/**
+ * SVG group rendering Bézier edge paths and arrow-heads between
+ * parent and child tree nodes.
+ *
+ * @param {Object}        props
+ * @param {Array<Object>} props.allNodes - Flat list of all positioned tree nodes.
+ */
 function Connectors({ allNodes }) {
   const edges = [];
   for (const p of allNodes) {
@@ -261,6 +331,13 @@ function Connectors({ allNodes }) {
 }
 
 // ── SVG: node cards ───────────────────────────────────────────────────────────
+/**
+ * SVG group rendering a single tree node as a rounded rectangle with
+ * a type tag, clipped label, subtitle, and optional line number.
+ *
+ * @param {Object} props
+ * @param {Object} props.node - Positioned tree node.
+ */
 function NodeCard({ node }) {
   const p   = palette(node.type, node.status);
   const tag = typeTag(node.type, node.rule);
@@ -329,6 +406,16 @@ const HANDLES = [
   { id: "sw", bottom: 0, left: 0,   width: CORNER_SIZE, height: CORNER_SIZE,         cursor: "sw-resize", dx: -1,dy: 0,  dw: 1,  dh: 1  },
 ];
 
+/**
+ * Hook that returns a resize-handle mouse-down factory for the
+ * floating pop-out window.
+ *
+ * @param {{x: number, y: number}} pos     - Current window position.
+ * @param {Function}               setPos  - Position setter.
+ * @param {{w: number, h: number}} size    - Current window size.
+ * @param {Function}               setSize - Size setter.
+ * @returns {(handle: Object) => (e: MouseEvent) => void}
+ */
 function useResize(pos, setPos, size, setSize) {
   return (handle) => (e) => {
     if (e.button !== 0) return;
@@ -381,6 +468,7 @@ const LEGEND_ITEMS = [
   { color: "#3b82f6", label: "Strategy" },
 ];
 
+/** Colour legend row displayed above the goal tree SVG. */
 function Legend() {
   return (
     <div style={{
@@ -403,6 +491,14 @@ function Legend() {
   );
 }
 
+/**
+ * Zoom in / zoom out buttons with a percentage readout.
+ *
+ * @param {Object}   props
+ * @param {number}   props.zoom    - Current zoom level (1 = 100%).
+ * @param {Function} props.zoomIn  - Increment zoom callback.
+ * @param {Function} props.zoomOut - Decrement zoom callback.
+ */
 function ZoomControls({ zoom, zoomIn, zoomOut }) {
   const btnStyle = {
     width: 26, height: 26, borderRadius: "50%",
@@ -433,6 +529,15 @@ function ZoomControls({ zoom, zoomIn, zoomOut }) {
   );
 }
 
+/**
+ * Interactive goal tree panel with inline SVG rendering, zoom
+ * controls, and an optional draggable/resizable pop-out window.
+ *
+ * @param {Object} props
+ * @param {Array}  props.lines      - Current proof lines.
+ * @param {Array}  props.openBoxes  - Currently open subproof descriptors.
+ * @param {string} props.conclusion - Target conclusion formula.
+ */
 export default function GoalTree({ lines, openBoxes, conclusion }) {
   const [popout, setPopout] = useState(false);
   const [pos,  setPos]  = useState({ x: 80, y: 80 });

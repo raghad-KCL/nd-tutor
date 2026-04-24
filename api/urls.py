@@ -1,3 +1,9 @@
+"""URL configuration for the natural-deduction tutor API.
+
+Maps endpoints for authentication, proof CRUD, validation, subproof
+operations, line deletion, and random problem generation.
+"""
+
 from django.urls import path
 from .views import (
     validate_step, normalise_formula, validate_task, open_subproof, close_subproof, check_proof,

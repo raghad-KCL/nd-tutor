@@ -1,5 +1,18 @@
 import { getSubproofColor, getDirectItemsForScope, boxGoalReached, formatRef } from "../utils";
 
+/**
+ * Renders the proof lines in a scope-aware layout with subproof boxes,
+ * reference highlighting, broken-ref indicators, and per-line remove
+ * buttons.
+ *
+ * @param {Object}   props
+ * @param {Array}    props.displayedLines   - Lines to render (premises or full proof).
+ * @param {Array}    props.refsPreview      - Parsed reference numbers/ranges for highlighting.
+ * @param {boolean}  props.taskLocked       - Whether the proof task is locked.
+ * @param {Object}   props.ruleLabelByValue - Map from rule codes to display labels.
+ * @param {Object|null} props.activeBox     - The currently open subproof box, or null.
+ * @param {Function} props.onRemoveLine     - Callback invoked with 0-based line index.
+ */
 export default function ProofWorkspace({
   displayedLines,
   refsPreview,

@@ -10,6 +10,27 @@ const toolButtonStyle = {
   fontSize: 14,
 };
 
+/**
+ * Panel for entering a proof task: premises textarea, conclusion input,
+ * symbol toolbar, random-task loader, and Start / Reset buttons.
+ *
+ * @param {Object}   props
+ * @param {string}   props.formPremisesText     - Current premises textarea value.
+ * @param {string}   props.formConclusion       - Current conclusion input value.
+ * @param {string}   props.randomDifficulty     - Selected difficulty filter for random tasks.
+ * @param {boolean}  props.loading              - Whether a request is in flight.
+ * @param {string}   props.taskError            - Validation error message to display, or "".
+ * @param {boolean}  props.isNarrow             - Whether the viewport triggers narrow layout.
+ * @param {Function} props.onChangePremisesText - Premises change handler.
+ * @param {Function} props.onSetFormConclusion  - Conclusion change handler.
+ * @param {Function} props.onSetRandomDifficulty - Difficulty selector change handler.
+ * @param {Function} props.onStartProof         - Start-proof button handler.
+ * @param {Function} props.onReset              - Reset button handler.
+ * @param {Function} props.onLoadRandomTask     - Random-task button handler.
+ * @param {Function} props.onDismissError       - Error dismissal handler.
+ * @param {Function} props.onFocus              - Input focus handler (for symbol toolbar).
+ * @param {Function} props.onInsertToken        - Symbol insertion handler.
+ */
 export default function TaskInputPanel({
   formPremisesText,
   formConclusion,

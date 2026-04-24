@@ -1,8 +1,27 @@
+"""Inference-rule implementations for natural-deduction proof checking."""
+
 from .ast import BinOp, Not
 
-class RuleError(Exception): pass
+
+class RuleError(Exception):
+    """Raised when an inference rule is applied incorrectly."""
+
+    pass
+
 
 def and_elim(ast_of_ref_line, which: int):
+    """Applies conjunction elimination (∧E).
+
+    Args:
+        ast_of_ref_line: AST of the referenced conjunction line.
+        which: ``1`` to extract the left conjunct, ``2`` for the right.
+
+    Returns:
+        The selected conjunct's AST.
+
+    Raises:
+        RuleError: If the referenced line is not a conjunction.
+    """
     # which = 1 or 2
     if not isinstance(ast_of_ref_line, BinOp) or ast_of_ref_line.op != "∧":
         raise RuleError("∧-Elimination requires a referenced line that is a conjunction (A ∧ B).")
@@ -10,11 +29,35 @@ def and_elim(ast_of_ref_line, which: int):
 
 
 def and_intro(ast_left, ast_right):
+    """Applies conjunction introduction (∧I).
+
+    Args:
+        ast_left: AST of the left conjunct.
+        ast_right: AST of the right conjunct.
+
+    Returns:
+        A ``BinOp("∧", ...)`` AST node.
+    """
     # Build the expected conjunction AST
     return BinOp("∧", ast_left, ast_right)
 
 
 def or_intro(ast_ref, proposed_ast, side: int):
+    """Validates disjunction introduction (∨I).
+
+    Args:
+        ast_ref: AST of the referenced line.
+        proposed_ast: AST of the proposed disjunction.
+        side: ``1`` if the reference should match the left disjunct,
+            ``2`` for the right.
+
+    Returns:
+        ``True`` if the introduction is valid.
+
+    Raises:
+        RuleError: If the proposed formula is not a disjunction or the
+            reference does not match the expected side.
+    """
     # side = 1 means ref must match left side of (A ∨ B)
     # side = 2 means ref must match right side of (A ∨ B)
     if not isinstance(proposed_ast, BinOp) or proposed_ast.op != "∨":
@@ -30,6 +73,22 @@ def or_intro(ast_ref, proposed_ast, side: int):
 
 
 def or_elim(ast1, ast2, ast3):
+    """Applies disjunction elimination (∨E).
+
+    Expects two implications ``A→C`` and ``B→C`` and a disjunction
+    ``A∨B``, and returns the common consequent ``C``.
+
+    Args:
+        ast1: AST of the first implication (``A→C``).
+        ast2: AST of the second implication (``B→C``).
+        ast3: AST of the disjunction (``A∨B``).
+
+    Returns:
+        The common consequent AST (``C``).
+
+    Raises:
+        RuleError: If the arguments don't satisfy ∨E conditions.
+    """
     if not (
         isinstance(ast1, BinOp) and ast1.op == "→" and
         isinstance(ast2, BinOp) and ast2.op == "→"
@@ -73,10 +132,32 @@ def imp_elim(ast1, ast2):
 
 
 def imp_intro(assumption_ast, final_ast):
+    """Applies implication introduction (→I).
+
+    Args:
+        assumption_ast: AST of the discharged assumption.
+        final_ast: AST of the formula derived at the end of the subproof.
+
+    Returns:
+        A ``BinOp("→", assumption, conclusion)`` AST node.
+    """
     return BinOp("→", assumption_ast, final_ast)
 
 
 def iff_elim(ast_ref):
+    """Applies biconditional elimination (↔E).
+
+    Decomposes ``A ↔ B`` into ``(A → B) ∧ (B → A)``.
+
+    Args:
+        ast_ref: AST of the referenced biconditional line.
+
+    Returns:
+        A conjunction AST of the two implications.
+
+    Raises:
+        RuleError: If the referenced line is not a biconditional.
+    """
     if not isinstance(ast_ref, BinOp) or ast_ref.op != "↔":
         raise RuleError("↔-Elimination requires a referenced line that is an equivalence (A ↔ B).")
 
@@ -86,6 +167,21 @@ def iff_elim(ast_ref):
 
 
 def iff_intro(ast1, ast2):
+    """Applies biconditional introduction (↔I).
+
+    Combines ``A→B`` and ``B→A`` into ``A ↔ B``.
+
+    Args:
+        ast1: AST of the first implication (``A→B``).
+        ast2: AST of the second implication (``B→A``).
+
+    Returns:
+        A ``BinOp("↔", A, B)`` AST node.
+
+    Raises:
+        RuleError: If the arguments are not matching converse
+            implications.
+    """
     if not (
         isinstance(ast1, BinOp) and ast1.op == "→" and
         isinstance(ast2, BinOp) and ast2.op == "→"
@@ -99,6 +195,21 @@ def iff_intro(ast1, ast2):
 
 
 def neg_elim(ast1, ast2):
+    """Applies negation elimination (¬E).
+
+    From ``¬A→B`` and ``¬A→¬B``, concludes ``A`` (proof by
+    contradiction).
+
+    Args:
+        ast1: AST of the first implication (``¬A→B``).
+        ast2: AST of the second implication (``¬A→¬B``).
+
+    Returns:
+        The inner formula ``A``.
+
+    Raises:
+        RuleError: If the arguments don't satisfy ¬E conditions.
+    """
     # Expect ¬A→B and ¬A→¬B, conclude A
     if not (
         isinstance(ast1, BinOp) and ast1.op == "→" and
@@ -124,6 +235,20 @@ def neg_elim(ast1, ast2):
 
 
 def neg_intro(ast1, ast2):
+    """Applies negation introduction (¬I).
+
+    From ``A→B`` and ``A→¬B``, concludes ``¬A``.
+
+    Args:
+        ast1: AST of the first implication (``A→B``).
+        ast2: AST of the second implication (``A→¬B``).
+
+    Returns:
+        A ``Not(A)`` AST node.
+
+    Raises:
+        RuleError: If the arguments don't satisfy ¬I conditions.
+    """
     # Expect A→B and A→¬B, conclude ¬A
     if not (
         isinstance(ast1, BinOp) and ast1.op == "→" and
@@ -146,6 +271,20 @@ def neg_intro(ast1, ast2):
 
 
 def reiteration(proposed_ast, resolved_ast):
+    """Validates a reiteration step.
+
+    The proposed formula must be identical to the referenced formula.
+
+    Args:
+        proposed_ast: AST of the formula the student entered.
+        resolved_ast: AST of the referenced line's formula.
+
+    Returns:
+        ``True`` if the formulas match.
+
+    Raises:
+        RuleError: If the formulas do not match.
+    """
     if proposed_ast != resolved_ast:
         raise RuleError(
             "REIT: the proposed formula does not match the referenced formula."

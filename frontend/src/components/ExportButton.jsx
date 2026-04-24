@@ -1,5 +1,16 @@
 import { useProofExport } from "../hooks/useProofExport";
 
+/**
+ * Small icon button that exports a proof to a printable HTML page.
+ *
+ * @param {Object}   props
+ * @param {Object}   props.proofData          - Proof data passed to `useProofExport`.
+ * @param {string|null} props.goalTreeElementId - DOM id of the goal tree element (unused in current export).
+ * @param {number}   [props.size=18]          - Icon size in pixels.
+ * @param {string}   [props.iconColor]        - Stroke colour for the SVG icon.
+ * @param {string}   [props.borderColor]      - Button border colour.
+ * @param {Function} [props.onExport]         - Optional callback fired after export.
+ */
 export default function ExportButton({ proofData, goalTreeElementId, size = 18, iconColor = "#3a5068", borderColor = "#c8d8e8", onExport }) {
   const { exportProof } = useProofExport();
 

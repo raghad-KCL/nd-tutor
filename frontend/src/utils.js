@@ -1,3 +1,9 @@
+/**
+ * Classifies a proof task as a tautology (no premises) or derivation.
+ *
+ * @param {string[]} premises - List of premise formula strings.
+ * @returns {"Tautology"|"Derivation"}
+ */
 export function getProblemType(premises) {
   return premises.length === 0 ? "Tautology" : "Derivation";
 }
@@ -37,12 +43,26 @@ export const SUBPROOF_COLORS = [
   { border: "#22c55e", bg: "#f0fdf4", treeBorder: "#22c55e", treeBg: "#f0fdf4", label: "#16a34a" },
 ];
 
+/**
+ * Returns the colour palette for a subproof at the given nesting depth.
+ * Cycles through `SUBPROOF_COLORS`.
+ *
+ * @param {number} depth - 0-based nesting depth.
+ * @returns {Object} Colour descriptor with `border`, `bg`, `label`, etc.
+ */
 export function getSubproofColor(depth) {
   return SUBPROOF_COLORS[depth % SUBPROOF_COLORS.length];
 }
 
 // ── Proof-line pure helpers ────────────────────────────────────────────────
 
+/**
+ * Splits a newline-delimited text block into an array of non-empty
+ * premise strings.
+ *
+ * @param {string} text - Raw textarea value.
+ * @returns {string[]} Trimmed, non-empty premise strings.
+ */
 export function premisesFromText(text) {
   return text
     .split("\n")
@@ -50,6 +70,12 @@ export function premisesFromText(text) {
     .filter(Boolean);
 }
 
+/**
+ * Creates a proof-line object for a premise formula.
+ *
+ * @param {string} formula - The premise formula string.
+ * @returns {Object} A line object with `kind: "premise"` and empty refs/scope.
+ */
 export function makePremiseLine(formula) {
   return {
     formula: formula.trim(),
@@ -61,6 +87,13 @@ export function makePremiseLine(formula) {
   };
 }
 
+/**
+ * Parses a comma-separated references string into an array of
+ * line numbers (integers) or subproof ranges (`[i, j]` arrays).
+ *
+ * @param {string} refsText - Raw text like "1, 3-5, 2".
+ * @returns {Array<number|number[]>} Parsed references.
+ */
 export function parseRefs(refsText) {
   if (!refsText.trim()) return [];
   return refsText
@@ -80,10 +113,25 @@ export function parseRefs(refsText) {
     .filter((x) => x !== null);
 }
 
+/**
+ * Formats a single reference for display (e.g. `3` or `"3–5"`).
+ *
+ * @param {number|number[]} ref - A line number or `[start, end]` range.
+ * @returns {string}
+ */
 export function formatRef(ref) {
   return Array.isArray(ref) ? `${ref[0]}\u2013${ref[1]}` : String(ref);
 }
 
+/**
+ * Compares two reference arrays for deep equality.
+ *
+ * Handles both integer refs and `[i, j]` range refs.
+ *
+ * @param {Array} a - First reference array.
+ * @param {Array} b - Second reference array.
+ * @returns {boolean}
+ */
 export function sameRefs(a = [], b = []) {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
@@ -96,6 +144,13 @@ export function sameRefs(a = [], b = []) {
 
 // ── Scope path helpers (used by GoalTree and ProofWorkspace) ───────────────
 
+/**
+ * Checks whether two scope paths are identical.
+ *
+ * @param {number[]} a
+ * @param {number[]} b
+ * @returns {boolean}
+ */
 export function samePath(a = [], b = []) {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
@@ -104,6 +159,13 @@ export function samePath(a = [], b = []) {
   return true;
 }
 
+/**
+ * Checks whether `prefix` is a prefix of `full`.
+ *
+ * @param {number[]} prefix
+ * @param {number[]} full
+ * @returns {boolean}
+ */
 export function isPrefixPath(prefix = [], full = []) {
   if (prefix.length > full.length) return false;
   for (let i = 0; i < prefix.length; i++) {
@@ -112,6 +174,17 @@ export function isPrefixPath(prefix = [], full = []) {
   return true;
 }
 
+/**
+ * Returns the direct child items (lines and subproof boxes) at
+ * a given scope path.
+ *
+ * Lines exactly at `scopePath` become `{ type: "line" }` items.
+ * Assumptions one level deeper become `{ type: "box" }` items.
+ *
+ * @param {number[]} scopePath - The scope to inspect.
+ * @param {Array}    lines     - Full proof lines.
+ * @returns {Array<{type: "line"|"box", line: Object}>}
+ */
 export function getDirectItemsForScope(scopePath, lines) {
   const items = [];
   for (const line of lines) {
@@ -131,6 +204,13 @@ export function getDirectItemsForScope(scopePath, lines) {
   return items;
 }
 
+/**
+ * Checks whether a subproof's goal has been derived within its scope.
+ *
+ * @param {Object} boxLine - The assumption line that opens the box.
+ * @param {Array}  lines   - Full proof lines.
+ * @returns {boolean}
+ */
 export function boxGoalReached(boxLine, lines) {
   const goal = (boxLine.boxGoal || "").trim();
   if (!goal) return false;
@@ -143,6 +223,13 @@ export function boxGoalReached(boxLine, lines) {
   );
 }
 
+/**
+ * Checks whether an open subproof box's goal has been derived.
+ *
+ * @param {Object|null} box   - Open box descriptor from `useProofState`.
+ * @param {Array}       lines - Full proof lines.
+ * @returns {boolean}
+ */
 export function isImpBoxGoalReached(box, lines) {
   if (!box) return false;
   const goal = (box.goalFormula || "").trim();
@@ -156,6 +243,17 @@ export function isImpBoxGoalReached(box, lines) {
   );
 }
 
+/**
+ * Returns the scope path where the next proof line should be written.
+ *
+ * Walks the open boxes stack from innermost outward, returning the
+ * scope of the first box whose goal has not yet been derived.
+ * Falls back to the top-level scope (`[]`).
+ *
+ * @param {Array} openBoxes - Currently open subproof descriptors.
+ * @param {Array} lines     - Full proof lines.
+ * @returns {number[]} The active writing scope path.
+ */
 export function getActiveWritingScope(openBoxes, lines) {
   if (!openBoxes.length) return [];
   for (let i = openBoxes.length - 1; i >= 0; i--) {

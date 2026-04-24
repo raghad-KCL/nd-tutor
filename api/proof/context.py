@@ -9,6 +9,22 @@ from .ast import BinOp
 
 @dataclass
 class ProofLine:
+    """A single parsed line from a proof payload.
+
+    Attributes:
+        line_no: 1-based line number.
+        formula: Raw formula string (stripped of whitespace).
+        kind: Line category — ``"premise"``, ``"assumption"``, or
+            ``"derived"``.
+        rule: Inference rule applied (e.g. ``"AND_E1"``), or ``""`` for
+            premises/assumptions.
+        refs: Line-number references used by the rule.
+        scope_path: Tuple of assumption line numbers defining the
+            nesting scope this line belongs to.
+        discharges: Tuple of assumption line numbers discharged by
+            this line (relevant for →I lines).
+    """
+
     line_no: int
     formula: str
     kind: str
@@ -20,10 +36,26 @@ class ProofLine:
 
 @dataclass
 class ProofContext:
+    """Indexed view of a proof's lines, providing scope-aware lookups.
+
+    Attributes:
+        lines: Ordered list of parsed ``ProofLine`` objects.
+    """
+
     lines: List[ProofLine]
 
     @classmethod
     def from_payload(cls, raw_lines: List[Dict[str, Any]]):
+        """Creates a ``ProofContext`` from raw proof-line dicts.
+
+        Args:
+            raw_lines: List of line dicts as received from the frontend,
+                each containing keys like ``formula``, ``kind``,
+                ``rule``, ``refs``, ``scopePath``, and ``discharges``.
+
+        Returns:
+            A new ``ProofContext`` instance with 1-based line numbering.
+        """
         parsed: List[ProofLine] = []
 
         for i, raw in enumerate(raw_lines, start=1):
@@ -42,12 +74,35 @@ class ProofContext:
         return cls(lines=parsed)
 
     def get_line(self, line_no: int) -> ProofLine:
+        """Returns the ``ProofLine`` at the given 1-based line number.
+
+        Args:
+            line_no: 1-based line number.
+
+        Returns:
+            The corresponding ``ProofLine``.
+
+        Raises:
+            RuleError: If the line number is out of range.
+        """
         idx = line_no - 1
         if idx < 0 or idx >= len(self.lines):
             raise RuleError(f"Referenced line {line_no} does not exist.")
         return self.lines[idx]
 
     def get_line_ast(self, line_no: int):
+        """Parses and returns the AST of the formula at the given line.
+
+        Args:
+            line_no: 1-based line number.
+
+        Returns:
+            The parsed ``Formula`` AST node.
+
+        Raises:
+            RuleError: If the line doesn't exist or its formula has a
+                syntax error.
+        """
         line = self.get_line(line_no)
         try:
             return parse_formula(line.formula)
@@ -55,11 +110,37 @@ class ProofContext:
             raise RuleError(f"Referenced line {line_no} has syntax error: {e}")
 
     def is_visible_from(self, ref_line_no: int, current_scope_path: Tuple[int, ...]) -> bool:
+        """Checks whether a line is visible from the given scope.
+
+        A line is visible if its scope path is a prefix of (or equal to)
+        the current scope path.
+
+        Args:
+            ref_line_no: 1-based line number of the referenced line.
+            current_scope_path: Scope path of the line being validated.
+
+        Returns:
+            ``True`` if the referenced line is accessible, ``False``
+            otherwise.
+        """
         ref = self.get_line(ref_line_no)
         ref_path = ref.scope_path
         return ref_path == current_scope_path[: len(ref_path)]
 
     def get_visible_line_ast(self, line_no: int, current_scope_path: Tuple[int, ...]):
+        """Returns the AST of a line after verifying scope visibility.
+
+        Args:
+            line_no: 1-based line number of the referenced line.
+            current_scope_path: Scope path of the line being validated.
+
+        Returns:
+            The parsed ``Formula`` AST node.
+
+        Raises:
+            RuleError: If the line is not visible from the current scope
+                or has a syntax error.
+        """
         if not self.is_visible_from(line_no, current_scope_path):
             raise RuleError(
                 f"Referenced line {line_no} is not visible from the current scope."
@@ -67,9 +148,32 @@ class ProofContext:
         return self.get_line_ast(line_no)
 
     def is_assumption_line(self, line_no: int) -> bool:
+        """Checks whether the given line is an assumption.
+
+        Args:
+            line_no: 1-based line number.
+
+        Returns:
+            ``True`` if the line's kind is ``"assumption"``.
+        """
         return self.get_line(line_no).kind == "assumption"
 
     def assumption_parent_scope(self, line_no: int) -> Tuple[int, ...]:
+        """Returns the parent scope path of an assumption line.
+
+        The parent scope is the assumption's scope path with the final
+        element (its own line number) removed.
+
+        Args:
+            line_no: 1-based line number of the assumption.
+
+        Returns:
+            The parent scope path as a tuple of ints.
+
+        Raises:
+            RuleError: If the line is not an assumption or has an
+                invalid scope path.
+        """
         line = self.get_line(line_no)
 
         if line.kind != "assumption":

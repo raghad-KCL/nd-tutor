@@ -1,3 +1,11 @@
+"""Built-in problem set for the natural-deduction tutor.
+
+Each entry is a dict with ``id``, ``premises``, ``conclusion``,
+``difficulty`` (``"easy"``/``"medium"``/``"hard"``), ``score``, and
+complexity metrics (``depth``, ``distinct_vars``,
+``proof_structure_factor``).
+"""
+
 PROBLEMS = [
     # ── Easy (score ≤ 4) ────────────────────────────────────────────────────
     {

@@ -2,6 +2,15 @@ import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { RULES } from "../utils";
 
+/**
+ * Custom dropdown for selecting an inference rule, with a hover tooltip
+ * showing each rule's schematic form. Uses a portal for the tooltip
+ * so it escapes overflow clipping.
+ *
+ * @param {Object}   props
+ * @param {string}   props.value    - Currently selected rule value.
+ * @param {Function} props.onChange - Callback invoked with the new rule value.
+ */
 function RuleSelect({ value, onChange }) {
   const [open, setOpen] = useState(false);
   const [tooltip, setTooltip] = useState(null); // { rule, top, left }
@@ -153,6 +162,28 @@ const toolButtonStyle = {
   fontSize: 14,
 };
 
+/**
+ * Panel containing the step formula input, rule selector, references
+ * field, symbol toolbar, and action buttons (Validate & Add, Check
+ * Proof, Save Proof).
+ *
+ * @param {Object}   props
+ * @param {string}   props.stepFormula      - Current step formula text.
+ * @param {string}   props.rule             - Currently selected rule code.
+ * @param {string}   props.refsText         - Raw references text.
+ * @param {boolean}  props.loading          - Whether a validation request is in flight.
+ * @param {boolean}  props.taskLocked       - Whether the task has been started.
+ * @param {boolean}  props.checkingProof    - Whether a proof check is in flight.
+ * @param {boolean}  props.savingProof      - Whether a save request is in flight.
+ * @param {Function} props.onSetStepFormula - Setter for the step formula.
+ * @param {Function} props.onSetRule        - Setter for the rule.
+ * @param {Function} props.onSetRefsText    - Setter for the references text.
+ * @param {Function} props.onFocus          - Callback when an input gains focus.
+ * @param {Function} props.onInsertToken    - Callback to insert a symbol token.
+ * @param {Function} props.onValidateAndAdd - Triggers step validation and insertion.
+ * @param {Function} props.onCheckProof     - Triggers proof completion check.
+ * @param {Function} props.onSaveProof      - Triggers proof saving.
+ */
 export default function StepInputPanel({
   stepFormula,
   rule,

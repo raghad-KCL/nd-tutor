@@ -15,13 +15,37 @@ const RULE_MAP = {
   IFF_I:"↔I",  IFF_E:"↔E",
   REIT:"Reit", ASSUME:"Assume", PREMISE:"Premise",
 };
+/**
+ * Formats an internal rule code to a display-friendly Unicode label.
+ *
+ * @param {string} r - Rule code (e.g. "AND_I").
+ * @returns {string} Display label (e.g. "∧I"), or the raw code if unmapped.
+ */
 function fmtRule(r) { return RULE_MAP[r] || r || ""; }
+/**
+ * Truncates text to a maximum length, appending "..." if needed.
+ *
+ * @param {string} text - The string to clip.
+ * @param {number} [max=21] - Maximum character count.
+ * @returns {string} The clipped string.
+ */
 function clip(text, max = 21) {
   if (!text) return "";
   return text.length > max ? text.slice(0, max - 1) + "..." : text;
 }
 
 // ── Build goal tree (same logic as GoalTree.jsx) ──────────────────────────────
+/**
+ * Builds a hierarchical goal tree from the current proof state.
+ *
+ * The tree has a root "goal" node for the conclusion, "subgoal" nodes
+ * for each subproof, and "step" leaf nodes for derived lines.
+ *
+ * @param {Array}  lines      - Current proof lines.
+ * @param {string} conclusion - Target conclusion formula.
+ * @param {Array}  openBoxes  - Currently open subproof descriptors.
+ * @returns {Object} The root tree node.
+ */
 function buildGoalTree(lines, conclusion, openBoxes) {
   const allLines = lines || [];
   const ct = (conclusion || "").trim();
@@ -102,7 +126,7 @@ function buildGoalTree(lines, conclusion, openBoxes) {
       id: "strategy", type: "strategy", label: "Strategy",
       sub: topRoots.length === 1
         ? `via ${fmtRule(topRoots[0].rule)}`
-        : `via vE / -E -- ${topRoots.length} cases`,
+        : `via vE / -E - ${topRoots.length} cases`,
       rule: topRoots[0].rule,
       status: allProved ? "proved" : "open",
       children: topRoots,
@@ -136,6 +160,16 @@ function buildGoalTree(lines, conclusion, openBoxes) {
 // ── Layout ────────────────────────────────────────────────────────────────────
 // node.x = leaf counter (fractional for internal nodes)
 // node.y = depth level
+/**
+ * Assigns x/y layout coordinates to each node via a recursive walk.
+ *
+ * Leaf nodes get sequential x values from `ctr`; internal nodes are
+ * centred over their children. `y` equals the depth level.
+ *
+ * @param {Object} node  - Tree node to position.
+ * @param {number} depth - Current depth (0 = root).
+ * @param {{val: number}} ctr - Mutable leaf counter.
+ */
 function assignPositions(node, depth, ctr) {
   if (node.children.length === 0) {
     node.x = ctr.val++;
@@ -150,12 +184,23 @@ function assignPositions(node, depth, ctr) {
 // Horizontal layout:
 //   px = left edge of rect = PAD + depth * H_LEVEL_W
 //   py = top  edge of rect = PAD + leafSlot * H_ROW_H
+/**
+ * Converts abstract x/y positions to pixel coordinates for horizontal layout.
+ *
+ * @param {Object} node - Tree node (mutated in place with `px`/`py`).
+ */
 function applyPixelsHorizontal(node) {
   node.px = PAD + node.y * H_LEVEL_W;
   node.py = PAD + node.x * H_ROW_H;
   for (const c of node.children) applyPixelsHorizontal(c);
 }
 
+/**
+ * Flattens a tree into a single array of all nodes (pre-order).
+ *
+ * @param {Object} root - Root node of the tree.
+ * @returns {Array<Object>} All nodes in pre-order.
+ */
 function collectAll(root) {
   const out = [];
   (function w(n) { out.push(n); n.children.forEach(w); })(root);
@@ -163,6 +208,13 @@ function collectAll(root) {
 }
 
 // ── Colour palette ────────────────────────────────────────────────────────────
+/**
+ * Returns SVG colour values for a node based on its type and status.
+ *
+ * @param {string} type   - Node type ("goal", "strategy", "subgoal", "step").
+ * @param {string} status - Node status ("proved", "open", "derived").
+ * @returns {{fill: string, stroke: string, sw: number, ink: string, dim: string}}
+ */
 function palette(type, status) {
   if (type === "goal")
     return status === "proved"
@@ -181,6 +233,13 @@ function palette(type, status) {
   return { fill:"#f8fafc", stroke:"#c8d8e8", sw:1, ink:"#94a3b8", dim:"#b8c4ce" };
 }
 
+/**
+ * Returns the uppercase category tag label displayed on a tree node.
+ *
+ * @param {string} type - Node type.
+ * @param {string} rule - Inference rule (used for subgoal labelling).
+ * @returns {string} The tag text (e.g. "GOAL", "IMP_IPROOF").
+ */
 function typeTag(type, rule) {
   if (type === "goal")     return "GOAL";
   if (type === "strategy") return "STRATEGY";
@@ -190,6 +249,14 @@ function typeTag(type, rule) {
 }
 
 // ── Build SVG string ──────────────────────────────────────────────────────────
+/**
+ * Builds a complete horizontal SVG string of the proof goal tree.
+ *
+ * @param {Array}  lines      - Current proof lines.
+ * @param {string} conclusion - Target conclusion formula.
+ * @param {Array}  openBoxes  - Currently open subproof descriptors.
+ * @returns {{ svg: string }} An object containing the SVG markup string.
+ */
 function buildHorizontalSVG(lines, conclusion, openBoxes) {
   const root = buildGoalTree(lines, conclusion, openBoxes);
   const ctr  = { val: 0 };
@@ -243,6 +310,14 @@ function buildHorizontalSVG(lines, conclusion, openBoxes) {
 }
 
 // ── Public hook ───────────────────────────────────────────────────────────────
+/**
+ * Provides a function to export the current proof as a printable HTML page.
+ *
+ * The exported page includes a summary table, proof steps, and a
+ * goal-tree SVG. It opens in a new browser tab and triggers `window.print()`.
+ *
+ * @returns {{ exportProof: (proofData: Object) => void }}
+ */
 export function useProofExport() {
   const exportProof = (proofData) => {
     const {

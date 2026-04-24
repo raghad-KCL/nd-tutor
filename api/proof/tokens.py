@@ -1,3 +1,5 @@
+"""Tokeniser and normaliser for propositional logic formula strings."""
+
 import re
 from dataclasses import dataclass
 from typing import List
@@ -6,8 +8,19 @@ from typing import List
 # Token definition
 # ----------------------------
 
+
 @dataclass(frozen=True)
 class Token:
+    """A single lexical token from a formula string.
+
+    Attributes:
+        kind: Token category — one of ``"ATOM"``, ``"NOT"``, ``"AND"``,
+            ``"OR"``, ``"IMP"``, ``"IFF"``, ``"LPAREN"``, ``"RPAREN"``,
+            or ``"EOF"``.
+        value: The raw lexeme text.
+        pos: 0-based character position in the normalised input string.
+    """
+
     kind: str   # "ATOM", "NOT", "AND", "OR", "IMP", "IFF", "LPAREN", "RPAREN", "EOF"
     value: str
     pos: int
@@ -46,6 +59,19 @@ WORD_OPS_REGEX = re.compile(r"\b(not|and|or)\b", flags=re.IGNORECASE)
 
 
 def _normalise(s: str) -> str:
+    """Normalises ASCII and word-based operators to Unicode symbols.
+
+    Applies three replacement passes in order:
+    1. Whole-word operators (``not``, ``and``, ``or``) → Unicode.
+    2. Multi-character ASCII operators (``<->``, ``->``, etc.) → Unicode.
+    3. Single-character ASCII operators (``~``, ``&``, ``|``, etc.) → Unicode.
+
+    Args:
+        s: Raw formula string.
+
+    Returns:
+        The formula string with all operators in Unicode form.
+    """
     s = s.strip()
 
     # 1) Replace word operators (safe: won't touch variable names)
@@ -65,6 +91,14 @@ def _normalise(s: str) -> str:
 
 
 def normalise_only(s: str) -> str:
+    """Normalises operator syntax without tokenising.
+
+    Args:
+        s: Raw formula string.
+
+    Returns:
+        The formula with operators normalised to Unicode symbols.
+    """
     return _normalise(s)
 
 
@@ -80,6 +114,17 @@ TOKEN_REGEX = re.compile(
 
 
 def tokenize(formula: str) -> List[Token]:
+    """Normalises and tokenises a propositional logic formula string.
+
+    Args:
+        formula: Raw formula string (may use ASCII or Unicode operators).
+
+    Returns:
+        A list of ``Token`` objects ending with an ``EOF`` token.
+
+    Raises:
+        ValueError: If the input contains an unrecognised character.
+    """
     text = _normalise(formula)
     tokens: List[Token] = []
     i = 0

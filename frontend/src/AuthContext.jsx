@@ -1,60 +1,59 @@
 import { createContext, useContext, useEffect, useState } from "react";
+import { fetchCurrentUser, loginUser, registerUser, logoutUser } from "./services/authApi";
 
+/** @type {React.Context<{user: string|null|undefined, login: Function, register: Function, logout: Function}|null>} */
 const AuthContext = createContext(null);
 
+/**
+ * Provides authentication state and actions to the component tree.
+ *
+ * On mount, fetches the current session user. Exposes `login`,
+ * `register`, and `logout` actions via context. The `user` value is
+ * `undefined` while loading, `null` when unauthenticated, or a
+ * username string when logged in.
+ *
+ * @param {Object} props
+ * @param {React.ReactNode} props.children - Child components.
+ */
 export function AuthProvider({ children }) {
   // undefined = loading, null = not logged in, string = username
   const [user, setUser] = useState(undefined);
 
   useEffect(() => {
-    fetch("http://localhost:8000/api/auth/me", {
-      method: "GET",
-      credentials: "include",
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        setUser(data?.username ?? null);
-      })
-      .catch(() => {
-        setUser(null);
-      });
+    fetchCurrentUser()
+      .then((username) => setUser(username))
+      .catch(() => setUser(null));
   }, []);
 
+  /**
+   * Authenticates with the backend and updates the user state.
+   *
+   * @param {string} username
+   * @param {string} password
+   * @returns {Promise<string>} The authenticated username.
+   */
   async function login(username, password) {
-    const res = await fetch("http://localhost:8000/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ username, password }),
-    });
-    const data = await res.json();
-    if (!res.ok || !data?.ok) {
-      throw new Error(data?.message || "Login failed.");
-    }
-    setUser(data.username);
-    return data.username;
+    const resultUsername = await loginUser(username, password);
+    setUser(resultUsername);
+    return resultUsername;
   }
 
+  /**
+   * Registers a new account and updates the user state.
+   *
+   * @param {string} username
+   * @param {string} password
+   * @returns {Promise<string>} The newly created username.
+   */
   async function register(username, password) {
-    const res = await fetch("http://localhost:8000/api/auth/register", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ username, password }),
-    });
-    const data = await res.json();
-    if (!res.ok || !data?.ok) {
-      throw new Error(data?.message || "Registration failed.");
-    }
-    setUser(data.username);
-    return data.username;
+    const resultUsername = await registerUser(username, password);
+    setUser(resultUsername);
+    return resultUsername;
   }
 
+  /** Logs out the user and resets the user state to `null`. */
   async function logout() {
-    await fetch("http://localhost:8000/api/auth/logout", {
-      method: "POST",
-      credentials: "include",
-    });
+    await logoutUser();
     setUser(null);
   }
 
@@ -65,6 +64,11 @@ export function AuthProvider({ children }) {
   );
 }
 
+/**
+ * Convenience hook to access the auth context.
+ *
+ * @returns {{ user: string|null|undefined, login: Function, register: Function, logout: Function }}
+ */
 export function useAuth() {
   return useContext(AuthContext);
 }

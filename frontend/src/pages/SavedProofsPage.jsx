@@ -2,7 +2,20 @@ import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../AuthContext";
 import ExportButton from "../components/ExportButton";
 import { useStickyBanner } from "../hooks/useStickyBanner";
+import { fetchProofs, fetchProof, deleteProof as deleteProofApi, updateProof } from "../services/proofApi";
 
+/**
+ * Page listing all of the user's saved proofs with search, filter,
+ * sort, inline rename, delete confirmation, and export capabilities.
+ * Prompts unauthenticated users to log in.
+ *
+ * @param {Object}   props
+ * @param {Function} props.onBackToWorkspace - Navigate back to the workspace.
+ * @param {Function} props.onOpenProof       - Callback to load a saved proof into the workspace.
+ * @param {boolean}  [props.hideBackButton=false] - Hide the "Back to Workspace" button.
+ * @param {Function} props.onOpenAuthModal   - Opens the authentication modal.
+ * @param {Function} props.onShowToast       - Toast display callback.
+ */
 export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBackButton = false, onOpenAuthModal, onShowToast }) {
   const { user } = useAuth();
   const { compact, wrapperRef } = useStickyBanner();
@@ -30,15 +43,9 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
     setProofsFeedback(null);
 
     try {
-      const res = await fetch("http://localhost:8000/api/proofs/", {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-      });
+      const data = await fetchProofs();
 
-      const data = await res.json();
-
-      if (!res.ok || data?.ok !== true) {
+      if (data?.ok !== true) {
         setProofsFeedback({ ok: false, message: data?.message || "Failed to load saved proofs." });
         return;
       }
@@ -55,15 +62,9 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
     setProofsFeedback(null);
 
     try {
-      const res = await fetch(`http://localhost:8000/api/proofs/${proofId}/`, {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-      });
+      const data = await fetchProof(proofId);
 
-      const data = await res.json();
-
-      if (!res.ok || data?.ok !== true) {
+      if (data?.ok !== true) {
         setProofsFeedback({ ok: false, message: data?.message || "Failed to open proof." });
         return;
       }
@@ -86,15 +87,9 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
     setProofsFeedback(null);
 
     try {
-      const res = await fetch(`http://localhost:8000/api/proofs/${proofId}/`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-      });
+      const { ok, data } = await deleteProofApi(proofId);
 
-      const data = await res.json();
-
-      if (!res.ok || data?.ok !== true) {
+      if (!ok) {
         setProofsFeedback({ ok: false, message: data?.message || "Failed to delete proof." });
         return;
       }
@@ -109,16 +104,9 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
   async function renameProof(proofId, newTitle) {
     const trimmed = newTitle.trim();
     try {
-      const res = await fetch(`http://localhost:8000/api/proofs/${proofId}/`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ title: trimmed }),
-      });
+      const { ok, data } = await updateProof(proofId, { title: trimmed });
 
-      const data = await res.json();
-
-      if (!res.ok || data?.ok !== true) {
+      if (!ok) {
         setProofsFeedback({ ok: false, message: data?.message || "Failed to rename proof." });
         return;
       }

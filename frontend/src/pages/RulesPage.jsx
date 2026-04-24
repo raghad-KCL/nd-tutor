@@ -153,6 +153,15 @@ const categoryColors = {
   "Reiteration": { bg: "#f0f5f5", border: "#508080", accent: "#2a6060", tag: "#daeaea" },
 };
 
+/**
+ * Expandable card for a single inference rule, showing its abbreviation,
+ * name, summary, schematic form, and reference requirements.
+ *
+ * @param {Object} props
+ * @param {Object} props.rule   - Rule descriptor with `id`, `name`, `abbr`,
+ *   `summary`, `schema`, and `refs`.
+ * @param {Object} props.colors - Category colour palette.
+ */
 function RuleCard({ rule, colors }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -258,6 +267,10 @@ function RuleCard({ rule, colors }) {
   );
 }
 
+/**
+ * Full-page reference of all supported propositional inference rules,
+ * grouped by category with a search filter and collapsible sticky banner.
+ */
 export default function RulesPage() {
   const [search, setSearch] = useState("");
   const { compact, wrapperRef } = useStickyBanner();
