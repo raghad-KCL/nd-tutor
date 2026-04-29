@@ -135,7 +135,11 @@ function buildGoalTree(lines, conclusion, openBoxes) {
 
   const topSteps = allLines
     .map((l, j) => ({ l, no: j + 1 }))
-    .filter(({ l }) => l.kind === "derived" && (l.scopePath || []).length === 0)
+    .filter(({ l }) =>
+      l.kind === "derived" &&
+      (l.scopePath || []).length === 0 &&
+      (l.discharges || []).length === 0
+    )
     .sort((a, b) => a.no - b.no);
   for (const { l, no } of topSteps) {
     root.children.push({
