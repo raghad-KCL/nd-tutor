@@ -144,8 +144,6 @@ def validate_step_payload(body: Dict[str, Any]) -> ValidationResult:
         if rule == "ASSUME":
             if refs:
                 raise RuleError("ASSUME does not take references.")
-            if proposed_ast is None:
-                raise RuleError("ASSUME requires a formula.")
             # backend trusts frontend to add the new line with scopePath = current_scope_path + [new_line_no]
             return ValidationResult(True, message="Assumption accepted.", normalised=normalised_step)
 

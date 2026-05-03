@@ -96,26 +96,25 @@ def validate_task(request):
     if not result.get("ok"):
         return JsonResponse(result, status=400)
 
-    # Complexity checks on the normalised ASTs
-    try:
-        ast_list = [parse_formula(p) for p in result["premises"]]
-        ast_list.append(parse_formula(result["conclusion"]))
+    # Complexity checks on the normalised ASTs.  Re-parsing is safe here
+    # because validate_task_payload already accepted these formulas and
+    # round-tripped them through formula_to_string.
+    ast_list = [parse_formula(p) for p in result["premises"]]
+    ast_list.append(parse_formula(result["conclusion"]))
 
-        distinct_vars = count_distinct_vars(ast_list)
-        if len(distinct_vars) > 5:
+    distinct_vars = count_distinct_vars(ast_list)
+    if len(distinct_vars) > 5:
+        return JsonResponse({
+            "ok": False,
+            "message": "Too many propositional variables. Please use at most 5 distinct variables (e.g. P, Q, R, S, T).",
+        }, status=400)
+
+    for ast in ast_list:
+        if parse_tree_depth(ast) > 5:
             return JsonResponse({
                 "ok": False,
-                "message": "Too many propositional variables. Please use at most 5 distinct variables (e.g. P, Q, R, S, T).",
+                "message": "Formula is too deeply nested. Please keep formulas to a maximum nesting depth of 5.",
             }, status=400)
-
-        for ast in ast_list:
-            if parse_tree_depth(ast) > 5:
-                return JsonResponse({
-                    "ok": False,
-                    "message": "Formula is too deeply nested. Please keep formulas to a maximum nesting depth of 5.",
-                }, status=400)
-    except Exception:
-        pass
 
     return JsonResponse(result, status=200)
 

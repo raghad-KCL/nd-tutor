@@ -3,7 +3,8 @@
     "allow": [
       "Read(//tmp/**)",
       "Bash(grep -c \"^$\" /tmp/sample05.txt)",
-      "Bash(pdftotext -layout \"/c/Users/Raghad/nd-tutor/Sources/SampleReport02.pdf\" \"/tmp/sample02.txt\")"
+      "Bash(pdftotext -layout \"/c/Users/Raghad/nd-tutor/Sources/SampleReport02.pdf\" \"/tmp/sample02.txt\")",
+      "Bash(python manage.py test api.tests)"
     ]
   }
 }

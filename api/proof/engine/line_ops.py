@@ -149,63 +149,18 @@ def delete_line_payload(body: Dict[str, Any]) -> "DeleteLineResult":
                 return [_rn(ref[0], _tr), _rn(ref[1], _tr)]
             return _rn(ref, _tr)
 
-        def _touches(ref, _tr=to_remove) -> bool:
-            if isinstance(ref, (list, tuple)):
-                return any(n in _tr for n in range(ref[0], ref[1] + 1))
-            return ref in _tr
-
         new_updated: List[Dict] = []
         for i, ln in enumerate(updated):
             if (i + 1) in to_remove:
                 continue
             new_ln = dict(ln)
-            old_refs = ln.get("refs") or []
-            old_discharges = ln.get("discharges") or []
             new_ln["scopePath"] = [_rn(x) for x in (ln.get("scopePath") or [])]
-            new_ln["refs"] = [_rr(r) for r in old_refs]
-            new_ln["discharges"] = [_rn(d) for d in old_discharges]
-            if not new_ln.get("brokenRef"):
-                if any(_touches(r) for r in old_refs) or any(d in to_remove for d in old_discharges):
-                    broken_src = next(
-                        (r[0] if isinstance(r, (list, tuple)) else r for r in old_refs if _touches(r)),
-                        next((d for d in old_discharges if d in to_remove), None),
-                    )
-                    new_ln["brokenRef"] = broken_src
-                    new_ln["brokenKind"] = "deleted"
+            new_ln["refs"] = [_rr(r) for r in (ln.get("refs") or [])]
+            new_ln["discharges"] = [_rn(d) for d in (ln.get("discharges") or [])]
             new_updated.append(new_ln)
 
         updated = new_updated
         broken_new_nos = {i + 1 for i, ln in enumerate(updated) if ln.get("brokenRef")}
-
-        # Re-cascade after removing the →I lines
-        def _ref_is_broken_inner(ref) -> bool:
-            if isinstance(ref, (list, tuple)):
-                return any(n in broken_new_nos for n in range(ref[0], ref[1] + 1))
-            return ref in broken_new_nos
-
-        changed = True
-        while changed:
-            changed = False
-            for i, ln in enumerate(updated):
-                if i + 1 in broken_new_nos:
-                    continue
-                broken_dep = None
-                for r in (ln.get("refs") or []):
-                    if _ref_is_broken_inner(r):
-                        broken_dep = r[0] if isinstance(r, (list, tuple)) else r
-                        break
-                if broken_dep is None:
-                    for d in (ln.get("discharges") or []):
-                        if d in broken_new_nos:
-                            broken_dep = d
-                            break
-                if broken_dep is not None:
-                    broken_new_nos.add(i + 1)
-                    new_ln = dict(ln)
-                    new_ln["brokenRef"] = broken_dep
-                    new_ln["brokenKind"] = "cascade"
-                    updated[i] = new_ln
-                    changed = True
 
     return DeleteLineResult(
         ok=True,
