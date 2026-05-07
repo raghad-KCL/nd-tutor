@@ -147,8 +147,13 @@ export default function SavedProofsPage({ onBackToWorkspace, onOpenProof, hideBa
   }, [renamingId]);
 
   useEffect(() => {
-    loadSavedProofs();
-  }, []);
+    if (user) {
+      loadSavedProofs();
+    } else {
+      setSavedProofs([]);
+      setProofsFeedback(null);
+    }
+  }, [user]);
 
   function getDisplayTitle(proof) {
     return proof.title || `Proof of ${proof.conclusion}`;
